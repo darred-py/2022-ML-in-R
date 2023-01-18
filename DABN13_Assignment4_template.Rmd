@@ -1,0 +1,466 @@
+---
+title: "Assignment 4"
+output:
+  html_document: default
+  word_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+## Preamble: Prostate specific antigen data
+Prostate specific antigen (PSA) might be known to you in the context of PSA tests, a widely used albeit somewhat controversial method to detect prostate cancer in middle-aged men. The dataset we are using in this lab contains measures of PSA levels in men shortly before they received prostate cancer treatment in the form of a surgical removal of their prostate. Additional variables are measures associated with the existing prostate cancer (log cancer volume Gleason score, percent of Gleason scores 4 or 5, seminal vesicle invasion, capsular penetration) as well as cancer-unrelated variables that are suspected to affect PSA levels (age, amount of benign prostatic hyperplasia, log prostate weight). 
+
+
+Before conducting the first part of this assignment, let's load and split our data.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+prostate       <- read.table('https://web.stanford.edu/~hastie/ElemStatLearn/datasets/prostate.data')
+train_index    <- prostate$train==T
+prostate       <- prostate %>% dplyr::select(-train)
+prostate.train <- prostate[train_index,]
+prostate.test  <- prostate[!train_index,]
+```
+
+
+
+## Part one: Ridge regression with *glmnet*
+*Glmnet* is the most popular library for ridge regression and the lasso in R. Its very comprehensible official documentation is available at https://rdrr.io/cran/glmnet/f/inst/doc/glmnet.pdf. In this basic part, you will familiarize yourself with the functionality of *glmnet*.
+```{r, echo=FALSE, message=FALSE}
+library(glmnet)
+```
+
+
+### Task 1a)
+All functions that we will use in this lab require us to provide a matrix of pre-processed, quantitative inputs that can be directly put into a cost minimization problem. Use the `model.matrix()` command to create such a matrix,`X.train.1a`, of *all* predictors in `prostate.train`. Don't include an intercept since *glmnet* commands do that automatically. Use a suitable specification when expressing the formula in `model.matrix()`
+Additionally, extract our outcome of interest from `prostate.train` into a vector `y.train.1a`.
+
+```{r}
+
+X.train.1a <- model.matrix(lpsa~.-1, prostate.train) 
+y.train.1a <- prostate.train$lpsa
+
+```
+
+
+### Task 1b)
+The `glmnet()` command learns a regularized supervised learning model from inputs and output that you supply as function inputs. Furthermore, `glmnet()` is written as a command for the more general Elastic Net, so you always have to specify the desired value for the parameter $\alpha$. Now do the following: 
+
+1. Check the help file for `glmnet()` to figure out which argument(s) you have to set in order to activate/deactivate input standardization. Write your answer, as well as the default value of the argument(s) into the string variable `stdz.arguments.1b`.
+2. Create an object `lambda.seq.1b` that contains an equally spaced grid of 400 tuning parameter values $\lambda$ between 0 and 20 .
+2. Use `glmnet()` to learn ridge regression models for all tuning parameter values and save the learned model(s) as `ridge.fit.1b`. Input variables should be standardized by the command. Look up the `glmnet()` help file to figure out how to set the inputs to `glmnet()`.
+3. Plot `ridge.fit.1b` with additional argument `xvar='lambda'` to get a regularization path for ridge regression.
+
+```{r}
+
+stdz.arguments.1b <- "standardize = TRUE, intercept = TRUE"
+lambda.seq.1b <- seq(from = 0, to = 20, length = 400)
+ridge.fit.1b  <- glmnet(x = X.train.1a, 
+                        y = y.train.1a,
+                        alpha = 0,
+                        lambda = lambda.seq.1b,
+                        standardize = TRUE)
+plot(ridge.fit.1b, xvar = 'lambda')
+
+```
+
+
+### Task 1c)
+The *glmnet* library has a built-in procedure for k-fold cross-validation. It is called `cv.glmnet()`. Let's explore this command now:
+
+1. The syntax of `cv.glmnet` follows largely that of `glmnet`. So use the inputs that you specified to get `ridge.fit.1b` as inputs for `cv.glmnet`. Additionally, specify that you want to conduct 5-fold cross-validation with squared error as error function (it is rather sloppily referred to as *loss* in the `cv.glmnet()` help file). Save your resulting object as `ridge.cv.1c`.
+2. Plot `ridge.cv.1c`. You'll see a smooth curve consisting of many red dots. However, there are also vertical grey bars around each of these dots. What do they indicate? Write your answer into the string variable `greybars.1c`. Additionally, there are two vertical, dotted lines. What do they indicate? Write your answer into the string variable `dottedlines.1c`
+
+```{r }
+
+set.seed(5)
+ridge.cv.1c <- cv.glmnet(x = X.train.1a,
+                         y = y.train.1a,
+                         lambda = lambda.seq.1b,
+                         alpha = 0,
+                         nfolds = 5,
+                         standardize = TRUE,
+                         type.measure = 'mse')
+plot(ridge.cv.1c)
+greybars.1c    <- "Grey bars represent the variance of k-folds cross validation"
+dottedlines.1c <- "Dotted lines represent the bounds of the standard error, from minimum MSE to one standard error upper-bound of MSE from the minimum"
+
+```
+
+
+### Task 1d) 
+The object `ridge.cv.1c` contains the tuning parameter value that minimizes cross-validation error. Extract this value into an object `ridge.lambda.best.1d`. Additionally, extract the one-S.E. choice for the tuning parameter into an object `ridge.lambda.1se.1d`. Lastly, judging from the regularization path from Task 2a, how much are the learned model coefficients shrunk to zero relative to a linear regression model without regularization? Save your answer as into the string variable `regularization.amount.1d`
+
+```{r }
+
+ridge.lambda.best.1d <- ridge.cv.1c$lambda.min
+ridge.lambda.1se.1d  <- ridge.cv.1c$lambda.1se
+regularization.amount.1d <- "Lasso shrinks coefficients to zero while Ridge Regression doesn't. We can see that in the graph of 1c where we have 8 coefficients throughout all lambdas"
+
+```
+
+
+### Task 1e)
+
+If we want to get predictions from a learned model with particular tuning parameter, we do not need to run `glmnet()` again. Instead, we can get predictions straight from an existing `cv.glmnet()` object. The help file on `predict.cv.glmnet` tells you how. Now do the following:
+
+1. Get a matrix of model inputs from `prostate.test`. The same instructions as in Task 1a apply. Save the resulting matrix as `X.test.1e`.
+3. Get ridge regression predictions from `ridge.cv.1c` with the tuning parameter choice in `ridge.lambda.1se.1d` for the input combinations in `X.test.1e`. Save these predictions as `yhat.test.ridge.1e`
+
+``` {r}
+
+X.test.1e          <- model.matrix(lpsa~.-1, prostate.test) 
+yhat.test.ridge.1e <- predict(object = ridge.cv.1c,
+                                                newx = X.test.1e,
+                                                s = ridge.lambda.1se.1d)
+  
+```
+
+
+
+## Part 2: Lasso with *glmnet*
+
+In this slightly more difficult section, we are going to repeat Part 1 for the lasso and improvise a little with the model specification.
+
+
+### Task 2a)
+Conduct the following steps:
+
+1. Set up a grid of 400 possible tuning parameter values between 0 and 2. Save this sequence as `lambda.seq.2a`. 
+2. Run `cv.glmnet()` with the same settings as in Task 1c (albeit for the lasso, not ridge regression) to determine the optimal value for $\lambda$. Save the resulting object as `lasso.cv.2a`. 
+3. Look at the plot of `lasso.cv.2a` and decide whether you want to pick the tuning parameter that minimizes cross-validation error or the value that results from the one-S.E. rule. State and motivate your choice in the string variable `bestlambda.lasso.2a`.
+4. Use the learned lasso with the tuning parameter of your choice to predict test outcomes. Save your predictions as `yhat.test.lasso.2a`. 
+
+``` {r}
+
+lambda.seq.2a       <- seq(from = 0, to = 2, length = 400)
+   
+set.seed(5)
+lasso.cv.2a         <- cv.glmnet(x = X.train.1a,
+                         y = y.train.1a,
+                         lambda = lambda.seq.2a,
+                         alpha = 1,
+                         nfolds = 5,
+                         standardize = TRUE,
+                         type.measure = 'mse')
+plot(lasso.cv.2a)
+bestlambda.lasso.2a <- "Choose lambda-SE due to the paramenter providing reasonably accurate predictions while also reducing model complexity" 
+yhat.test.lasso.2a  <- predict(object = lasso.cv.2a,
+                               newx = X.test.1e,
+                               s = lasso.cv.2a$lambda.1se)
+
+```
+
+
+### Task 2b)
+
+The performance of models learned with `glmnet()` crucially depends on which input variables we use. If we wanted to capture mode complicated patterns between output and input, we could augment our input matrix with interactions and/or higher powers of the original inputs. In this task, we pursue a different idea which is a hybrid between regularization and dimension reduction. Conduct the following steps:
+
+1. Use `preProcess()` to calculate the transformations that we need to obtain all 8 principal components of `X.train.1a`. You can do that by specifying the correct pre-processing method. Save the transformations as `pca.param.2b`
+2. "Predict" the principal component scores for `X` and save them as `X.pc.2b`
+3. Combine the columns of `X.train.1a` and `X.pc.2b` into a matrix `Xplus.train.2b` 
+
+``` {r, echo=FALSE, message=FALSE}
+
+library(caret)
+
+```
+
+``` {r}
+
+pca.param.2b   <- preProcess(X.train.1a, method = c('pca'), pcaComp = 8)
+X.pc.2b        <- predict(object = pca.param.2b, newdata = X.train.1a)
+Xplus.train.2b <- cbind(X.train.1a,  X.pc.2b)
+
+```
+
+
+### Task 2c)
+
+Conduct the steps of Task 2a again, but now use your augmented input matrix `Xplus.train.2b` and don't construct model predictions yet.
+
+``` {r}
+set.seed(5)
+lasso2.cv.2c         <- cv.glmnet(x = Xplus.train.2b,
+                         y = y.train.1a,
+                         lambda = lambda.seq.2a,
+                         alpha = 1,
+                         nfolds = 5,
+                         standardize = TRUE,
+                         type.measure = 'deviance')
+bestlambda.lasso2.2c <- "lambda SE at 0.19" 
+
+```
+
+
+### Task 2d) 
+
+Before we can make output predictions from your chosen model, we need to augment our test data. First, use `pca.param.2b` to get principal component scores of `X.test.1e`. Save them as `Xpc.test.2d`. Then combine this matrix with `X.test.1e` into a matrix `Xplus.test.2d`. Finally, make output prediction for your augmented test inputs using `lasso2.cv.2c` and your preferred tuning parameter value. Save these predictions as `yhat.test.lasso2.2d`.
+
+
+``` {r}
+
+Xpc.test.2d         <- predict(object = pca.param.2b, newdata = X.test.1e)
+Xplus.test.2d       <- cbind(X.test.1e, Xpc.test.2d)
+yhat.test.lasso2.2d <- predict(object = lasso2.cv.2c,
+                               newx = Xplus.test.2d,
+                               s = lasso2.cv.2c$lambda.1se)
+
+```
+
+
+### Task 2e)
+
+Lasso performs variable selection in addition to shrinkage. For this reason, we move outside our prediction-centered machine learning bubble for a second and have a look at the input variables that are included in our chosen lasso model from Task 2c. The `coef()` command allows us to extract model coefficients from an existing `cv.glmnet()` object. In order to get coefficients for a single tuning parameter, we define its value as a second function input `s`. Get the coefficient vector of the learned model that you used to make predictions in Task 2d and save it as `lasso2.coefs`.
+
+``` {r}
+
+lasso2.coefs <- coef(lasso2.cv.2c, s = lasso2.cv.2c$lambda.1se)
+print(lasso2.coefs)
+
+```
+
+
+
+## Part 3: Tuning elastic net with *caret*, performance evaluation
+
+Elastic net is a bit inconvenient to implement in *glmnet* because the tuning parameter $\alpha$ cannot be chosen automatically with `cv.glmnet()`. This provides us with yet another opportunity to use the functionality of *caret* in this moderately difficult part. 
+
+
+### Task 3a)
+
+Conduct the following tasks to prepare the inputs to`train()`: 
+
+1. Set the tuning controls and save them as `tunectrl.3a`. We want 5-fold cross-validation without repetition. 
+2. Generate a first grid of 400 values from 0 to 20 for $\lambda$ and save it as `lambda.seq.3a`. 
+3. Create a second grid of 6 values from 0 to 1 for $\alpha$ and save it as `alpha.seq.3a`. 
+4. Use `grid.expand()` to get all combinations of values in `lambda.seq.3a` and `alpha.seq.3a` and save the resulting data frame with variable names `lambda` and `alpha` as `tune.grid.elnet.3a`.
+
+``` {r, echo = TRUE}
+
+tunectrl.3a        <- trainControl(method = 'cv',
+                                   number = 5, savePredictions = T)
+lambda.seq.3a      <- seq(from=0, to=20, length = 400)
+alpha.seq.3a       <- seq(from=0, to=1, length = 6)
+tune.grid.elnet.3a <- expand.grid(lambda = lambda.seq.3a, alpha = alpha.seq.3a)
+
+```
+
+
+### Task 3b) 
+Now we can tune our model and obtain test predictions:
+
+1. Implement `train()` with `method="glmnet"`, tuning controls and tuning parameter grid from Task 4a and augmented inputs `Xplus.train.2b`. For consistency with the previous parts, let standardization be performed by `glmnet()` and not by `train()`. Save the resulting object as `tune.elnet.3b`
+2. The tuning parameters chosen in step 1 are those that minimize CV error. Extract them into the object `tune.elnet.best.3b`. Does this choice result in a model that leans more into the direction of ridge regression or more towards the lasso? Write a well-motivated answer into the string variable `interpret.tune.3b`
+3. Predict outputs from `tune.elnet.3b` for the test inputs `Xplus.test.2d`. Save these predictions as `yhat.test.elnet.3b`.
+
+``` {r, echo=TRUE} 
+set.seed(5)
+tune.elnet.3b      <- caret::train(x = Xplus.train.2b,
+                                   y = y.train.1a,
+                                   method = 'glmnet',
+                                   trControl = tunectrl.3a,
+                                   tuneGrid = tune.grid.elnet.3a)
+tune.elnet.best.3b <- tune.elnet.3b$bestTune
+interpret.tune.3b  <- "Alpha = 0.55 which means the tune param. leans towards lasso just slightly"
+yhat.test.elnet.3b <- predict(object = tune.elnet.3b,
+                              newdata = Xplus.test.2d,
+                              s = tune.elnet.best.3b)
+
+
+```
+
+
+### Task 3c) 
+
+We have now obtained predictions on test data for four different versions of the elastic net. It is time to find out which of them performs best. Use the observed test outcomes to calculate the mean squared error for all `yhat.test`-objects that we have created so far. Save them as `MSE.` plus the name of the method that we used previously.
+
+Which one among the four candidate algorithms is superior? Write your conclusion and some details about the margin between the best and the remaining algorithms in the string variable `conclusion.3c`.
+
+``` {r}
+
+MSE.ridge  <- mean((prostate.test$lpsa - yhat.test.ridge.1e)^2)
+MSE.lasso  <- mean((prostate.test$lpsa - yhat.test.lasso.2a)^2)
+MSE.lasso2 <- mean((prostate.test$lpsa - yhat.test.lasso2.2d)^2)
+MSE.elnet  <- mean((prostate.test$lpsa - yhat.test.elnet.3b)^2)
+conclusion.3c <- "MSE.lasso2 has a lowest value compared to the rest and MSE.lasso has 2nd lowest. Therefore lasso algorithm performs the best"
+
+```
+
+
+
+## Part 4: Manual cross-validation for ridge regression
+In this really advanced part, we are going to manually conduct the grid search over tuning parameter values that `cv.glmnet()` automatically provides us with when we fit the lasso or ridge regression. We are going to find the optimal tuning parameter for ridge regression since this allows us even to program the ridge regression estimator manually. The learning goal of this part is to realize what a gigantic mess machine learning life is without `caret` (or similar libraries).
+
+
+### Task 4a)
+Write a function `ridge.coefs.4a` that takes a matrix of input variables `X` an output vector `y` and a value of the tuning parameter `lam` as inputs and which returns the learned ridge regression coefficients. Use only matrix operations and basic R commands like `dim(x)`, `t()`, `solve()`,  `rep()` or `diag()` inside the function.
+```{r}
+
+ridge.coefs.4a <- function(X, y, lam){
+    inv_X <- solve(t(X) %*% X + dim(X)[1]*lam*diag(x=1, nrow = dim(X)[2])) #excluding 1/n where n=dim(X)[1]
+    coef <- inv_X %*% t(X) %*% y
+    return(coef)
+}
+
+#ridge.coefs.4a(X.train.1a, y.train.1a, 1)
+```
+
+
+### Task 4b) 
+Write a function `scale.traintest.4b` that takes the following inputs:
+
+- `Xtrain`: training inputs
+- `ytrain`: training output
+- `Xtest`:  test inputs
+- `ytest`:  test outputs
+
+The function is supposed to do the following:
+
+1. Obtain mean and standard deviation of every column in `Xtrain` and standardize `Xtrain` (you may use `preProcess()`),
+2. Standardize `Xtest` using the mean and standard deviation from step 1,
+3. Get the mean of `ytrain` and demean `ytrain`,
+4. Subtract the same mean from `ytest`.
+
+`scale.traintest.4b` should then return a list object containing the transformed data.
+
+``` {r}
+y.test <- prostate.test$lpsa
+
+scale.traintest.4b <- function(Xtrain, ytrain, Xtest, ytest){
+    param.process.X <- preProcess(x = Xtrain, method = c('center', 'scale'))
+    ytrain.mean <- mean(ytrain)
+    
+    Xtrain.std <- as.matrix(predict(param.process.X, newdata = Xtrain))
+    Xtest.std <- as.matrix(predict(param.process.X, newdata = Xtest))
+    ytrain.cen <- ytrain - ytrain.mean
+    ytest.cen <- ytest - ytrain.mean
+    return(list(Xtrain=Xtrain.std, ytrain=ytrain.cen, Xtest=Xtest.std, ytest=ytest.cen))
+}
+
+#param.test <- scale.traintest.4b(X.train.1a, y.train.1a, X.test.1e, y.test)
+#ridge.coefs.4a(param.test$Xtrain, param.test$ytrain, 0)
+```
+
+
+### Task 4c)
+Write a function `ridge.testMSE.4c` that takes the following inputs:
+
+- `Xtrain`: training inputs
+- `ytrain`: training output
+- `Xtest`:  test inputs
+- `ytest`:  test outputs
+- `lam`:    tuning parameter value
+
+The function is supposed to do the following: 
+1. Use `scale.traintest.4b` to get standardize inputs and demean outputs.
+2. Get the ridge regression coefficients for given `lam` from the transformed training data using `ridge.coefs.4a`. 
+4. Predict output values on the transformed test data and calculate test MSE. This test MSE is returned as function output.
+
+``` {r}
+
+ridge.testMSE.4c <- function(Xtrain, ytrain, Xtest, ytest, lam){
+    scaled.list <- scale.traintest.4b(Xtrain = Xtrain, ytrain = ytrain, Xtest = Xtest, ytest = ytest)
+    coefs.train <- ridge.coefs.4a(X = scaled.list[[1]], y = scaled.list[[2]], lam = lam)
+    y.pred <- scaled.list[[3]] %*% coefs.train
+    testMSE <- mean((scaled.list[[4]] - y.pred)^2)
+    return(testMSE)
+    }
+
+#ridge.testMSE.4c(X.train.1a, y.train.1a, X.test.1e, y.test, 0)
+```
+
+
+### Task 4d)
+Write a function `ridge.testMSE.grid.dc` that takes the same inputs as `ridge.testMSE.4c` except that it takes an entire vector of tuning parameter values `lam.grid` instead of one value `lam`. For each value in `lam.grid` it gets test MSE from `ridge.testMSE.4c`. The entire vector of test MSEs is then returned as function output
+
+``` {r}
+
+ridge.testMSE.grid.4d <- function(Xtrain, ytrain, Xtest, ytest, lam.grid){
+    scaled.list <- scale.traintest.4b(Xtrain = Xtrain, ytrain = ytrain, Xtest = Xtest, ytest = ytest)
+    coefs.matrix <- matrix(data = NA, nrow = dim(Xtrain)[2], ncol = length(lam.grid))
+    for (i in 1:dim(coefs.matrix)[2]){
+        coefs.matrix[,i] <- ridge.coefs.4a(X = scaled.list[[1]], y = scaled.list[[2]], lam = lam.grid[i])
+    }
+    y.pred.matrix <- scaled.list[[3]] %*% coefs.matrix
+    
+    testMSE <- rep(x=0, times=dim(y.pred.matrix)[2])
+
+    for (i in 1:dim(y.pred.matrix)[2]){
+        testMSE[i] <- mean((scaled.list[[4]] - y.pred.matrix[,i])^2)
+    }
+    return(testMSE)
+}
+
+#ridge.testMSE.grid.4d(X.train.1a, y.train.1a, X.test.1e, y.test, 0:5)
+```
+
+
+### Task 4e)
+
+Write a function `ridge.kfolderr.4e` that takes the following inputs:
+
+- `X`: a matrix of model inputs,
+- `y`: a vector of model outputs,
+- `lamgrid:`a vector of tuning parameter values,
+- `batchid`: A vector that specifies to which batch a particular data point belongs to.
+
+`ridge.kfolderr.4e` should first identify $K$ as the maximum value in `batchid`. Then it should loop over the values $1,2,\ldots,K$. At iteration $k$, the loop should do the following:
+
+1. Set `X.train` (`y.train`) as all data points in `X` (`y`) that do *not* belong to batch $k$,
+2. Set `X.test` (`y.test`) as all data points in `X` (`y`) that *belong* to batch $k$.
+3. Call `ridge.testMSE.grid.4c` for the given split into training and test batches to get test MSEs for the entire vector `lamgrid`.
+
+Once the loop has finished, the test MSEs of all $K$ iterations should be averaged. The resulting vector of k-fold cross-validation errors should be the function output.
+
+```{r}
+
+ridge.kfolderr.4e <- function(X, y, lamgrid, batchid){
+    K.max <- max(batchid)
+    id.matrix <- matrix(data = rep(x=1:K.max,times= dim(X)[1]), ncol = K.max, byrow = T)
+    MSE.vec <- c()
+    for (k in 1:K.max){
+        id.matrix[,k] <- (id.matrix[,k] == batchid) * 1:(dim(X)[1])
+        test <- id.matrix[,k]
+        test <- test[! test %in% 0]
+        
+        MSE.vec <- cbind(MSE.vec ,ridge.testMSE.grid.4d(X[-test,], y[-test], X[test,], y[test], lamgrid))
+    }
+    
+    return(rowMeans(MSE.vec))
+}
+ 
+# batchid.test <- replicate(expr = sample(1:3,1), n = 97)
+# #batchid.test[runif(30,1,97)] <- 1
+# lam.test <- seq(from=0,to=5,length=50)
+# 
+# View(as.matrix(ridge.kfolderr.4e(X = prostate[,1:8], y = prostate[,9], batchid = batchid.test, lamgrid = lam.test)))
+
+```
+
+### Task 4f)
+
+Below, I specify `lamgrid.4f`, a grid of potential values for $\lambda$, as well as `batches.4f`, an allocation of data points to batches. Do the following: 
+
+1. Use `ridge.kfolderr.4e` with these inputs as well as `y.train.1a` and `X.train.1a` to get k-fold CV errors for every tuning parameter value in `lamgrid.4f`. Save this object as `kfolderrs.4f`,
+2. Use `which.min()` to extract the index of the smallest k-fold CV value in `kfolderrs.4f` into a new object `minindex.4f`,
+3. Save the k-fold CV error at index `minindex.4f` of `lamgrid.4f` as `best.lambda.4f`.
+
+```{r}
+lamgrid.4f <- seq(0,20, length=400)
+set.seed(5)
+batches.4f <- sample(rep(1:5, length.out=length(y.train.1a)))
+
+kfolderrs.4f   <- ridge.kfolderr.4e(X = X.train.1a, 
+                                    y = y.train.1a, 
+                                    lamgrid = lamgrid.4f, 
+                                    batchid = batches.4f)
+minindex.4f    <- which.min(kfolderrs.4f)
+best.lambda.4f <- lamgrid.4f[minindex.4f]
+
+plot(lamgrid.4f, kfolderrs.4f, type = 'l')
+
+```
+

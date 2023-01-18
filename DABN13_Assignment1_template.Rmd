@@ -1,0 +1,275 @@
+---
+title: "Assignment 1"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+```
+
+This lab comes in the form of an R Markdown document which you are supposed to fill in. All instances that require you input are marked by "??". Please replace that with the corresponding code for a given task. Additionally, you need to uncomment all commented (`#`) lines in the R code chunks below in order to make the script work. Moreover, note the following:
+
+* Often, we have specified names for objects that you are supposed to create. Use them. Do not come up with any object names of your own.
+* Tasks that require you to write a function will provide you with function name, all inputs to the function as well as the function output. Your task is to write operations within the function that work with these given parameters. 
+* At times, you will be asked to use a specific function to complete a task. If this is the case, please follow instructions to the point. Do not implement any alternative  way of performing the task.
+* Sometimes, you might have questions concerning the use of a specific R command. Please approach this situation as in a real-life programming situation: First, use the R help files to find an answer. If unsuccessful, use Google. If still unsuccessful, post your question in the discussion section of our course page on Canvas.
+* Please write text answers into the corresponding string variables.
+
+
+
+
+# Part one: Linear regression practice
+
+In this basic section, we are going to use the standard canned routines for linear regression in R.
+
+
+## Load the data set
+
+We will be working with ` Guns.dta`, a Stata dataset containing yearly US state data between 1977 and 1999 of three different crime rates, a number of additional state characteristics, as well as an indicator for the existence of a "shall-carry" law that allows citizens to obtain a permission to wear concealed handguns. In the following, you will fit a simple predictive model for state-wide violent crime rates.
+
+To begin with, use the read.dta command in the "foreign" package to load ` Guns.dta`
+
+
+```{r , echo=T}
+library(foreign) #(load "foreign" package here)
+# ?? (optionally set working directory)
+guns.data <- read.dta("../DABN13/Guns.dta")
+```
+
+
+
+
+## Task 1a)
+As a first task, we learn a linear regression using the `lm()`-command. This command primarily asks you to specify a model formula. The basic syntax for formulas is as follows:
+
+*outvar* ~ *invar1* + *invar2* + *invar3*
+
+Here, *outvar* and *invar1*-*invar3* must be replaced with the names of output variable and input variables respectively. For more detailed info on formulas, see the "Details" section in the R help file on "formula".
+
+`lm()` also requires you to specify a "data" argument. See the "Arguments" section in the help file on "lm" for details.
+
+Now use `lm()` to learn a regression model with log violent crime rate as output and the following input variables:
+
+* the logarithm of state population, 
+* average per capita income, 
+* shall-carry law in effect, 
+* log murder rates, 
+* log robbery rates, 
+* (an intercept) 
+
+Save your learned model as object ` lm.fit1a `
+
+```{r, echo=TRUE}
+lm.fit1a <- lm(log(vio) ~ log(pop) + avginc + shall + log(mur) + log(rob), guns.data)
+
+```
+
+## Task 1b)
+Least squares regression coefficients can be extracted from the learned model ` lm.fit1a ` by using the `coef()`-command. Save the coefficients as object `lm.coef1b`. 
+
+```{r, echo=TRUE}
+lm.coef1b <- coef(lm.fit1a)
+
+```  
+
+## Task 1c)
+Model residuals can be extracted from objects created by `lm` using the `residuals()` function. Obtain the model residuals of the regression from Task 1a in this way. 
+
+Additionally, residuals are saved inside the ` lm.fit1a ` object. Use the `names()`-function to report the names of all objects within ` lm.fit1a `. Save this vector of names as `lm.objnames`.
+
+Lastly, calculate the sum of squared differences between the residuals you find there and the residuals that you extracted using `residuals()`.
+
+``` {r, echo=TRUE}
+lm.res1c <- residuals(lm.fit1a)
+lm.objnames <- names(lm.fit1a)
+
+diff.res <- sum((lm.fit1a$residuals - lm.res1c)^2)
+print(diff.res)
+
+```
+
+## Task 1d)
+In order to obtain training data predictions, we can use `predict()`. Do this and save your predicte outputs as `lm.pred2d`. 
+
+The data for which we predict here is the same data used for model training. Accordingly, only need to specify one argument (i.e. input) for `predict()`. 
+
+```{r, echo=TRUE}
+lm.pred1d <- predict(lm.fit1a)
+
+```
+
+## Task 1e)
+A good prediction model for violent crime rates should capture all systematic patterns in the variation of this variable. A simple, but very effective way of finding out whether this is the case is to look at residual plots. If model residuals look like more than completely random noise, then there must be patterns left that we can exploit. Conduct the following steps: 
+
+1. Create a data frame `plotdata1e` that contains training data predictions and residuals from `lm.fit1a`.
+2. Complete the code chunk that creates the object `figure1e` by making appropriate replacements for `??`. We want a plot that has model residuals from on they-axis and outcome predictions on the x-axis.
+3.  Do you see any remaining systematic patterns in the data? Write your answers into the string variable `rem.patterns1e`.
+
+``` {r, echo=TRUE}
+library(ggplot2)
+
+plotdata1e <- data.frame(lm.pred1d, lm.fit1a$residuals)
+
+figure1e <- ggplot(data=plotdata1e, mapping=aes(x=lm.pred1d, y=lm.fit1a$residuals)) +         # opens plot surface
+              geom_point() + # adds scatter plot
+              geom_smooth(se=FALSE,method='loess', col='red') # adds "a fitted smooth curve"
+print(figure1e)
+
+rem.patterns1e <- "No patterns" #Write answer as string variable
+
+```
+
+
+## Task 1f)
+Let us proceed with another plot that should highlight an obvious source of unaccounted patterns in the data. Conduct the following steps:
+
+1. Create a data frame `plotdata1f` which adds the variable `stateid` from `guns.data` to `plotdata1e`. 
+2. Plot the model residuals (x-axis) against ` stateid` (y-axis).
+3. Describe any patterns that you see or conclude that you don't see any. Irrespective of your choice, write your answer into the string variable `whatIsee1f`
+
+``` {r, echo=TRUE}
+plotdata1f <- data.frame(guns.data$stateid, plotdata1e)
+figure1f <- ggplot(plotdata1f, mapping=aes(lm.fit1a.residuals, guns.data.stateid)) + 
+              geom_point()
+print(figure1f)
+
+whatIsee1f <- "States have varying residuals, so our estimate will have a better prediction on some states over others"
+
+```
+
+
+## Task 1g) 
+`stateid` is a variable that want to add to our model specification in some form. Before doing this, use the `summary()` command to get some descriptive statistics this variable in ` guns.data` and save them as object `summary1g`. 
+
+You will see that a mean and a median are reported. Hence, as what type of variable is `stateid` apparently seen by R? Write your answer into the string variable `typeofvarb1g`. 
+
+Would it make sense to add `stateid` variable into our model from Task 1a) as it currently is? Why or why not? Write your answer into the string variable `in_regmodel1g`.
+
+```{r, echo=TRUE}
+summary1g <- summary(guns.data$stateid)
+print(summary1g)
+
+typeofvarb1g <- "Numeric or Integer"
+in_regmodel1g <- "No because state ID is a label and does not imply a meaningful relationship between the values and states"
+
+```
+
+## Task 1h)
+The way in which R treats a specific variable can change considerably if we encode it as a factor variable. Hence, replace the variable `stateid` in `guns.data` with a version if itself that is encoded as factor variable. Use the `factor()` command for that. 
+
+Next, get the summary statistics of this modified variable and save them as object `summary1h`. 
+What has changed? Write your answer into the string variable `whatchanged1h`
+
+```{r, echo=TRUE}
+guns.data$stateid <- factor(guns.data$stateid)
+summary1h <- summary(guns.data$stateid)
+print(summary1h)
+whatchanged1h <- "R is no longer recognizing the variable stateid as a numeric but as a factor. Summary function returns #rows of data for each state ID instead of quartile stats"
+```
+
+## Task 1i)
+Learn the regression model from Task 1a with factor variable `state_id` as an additional regressor. Use the `summary()` command to report a summary of the regression results. How has `lm()` included `stateid` into the model?
+
+```{r, echo=TRUE}
+lm.fit1i <- lm(log(vio) ~ log(pop) + avginc + shall + log(mur) + log(rob) + stateid, guns.data)
+summary1i <- summary(lm.fit1i)
+print(summary1i$coefficients[1:15,])
+
+howincluded1i <- "State ID is used as additional input variables"
+```
+
+## Task 1j)
+The regression results in Task 1i) look the way they do because the ` lm()` command conveniently transforms the factor variable `stateid` into numerical variables before fitting the model. In particular, the `model.matrix()` command is automatically used to arrive at a set of input variables that one can directly feed into a least squares estimation routine. 
+
+Some important R-commands are less convenient and require you to transform the predictors yourselves. In order to prepare for this situation, use the `model.matrix()` command manually with the same model specification as in Task 1i to get the set of predictors internally generated by `lm()`. Inspect the resulting matrix (e.g. using the `View()` command)  and describe in how far it differs from the variables that you specified.
+```{r, echo=TRUE}
+inputs1j   <- model.matrix(log(vio) ~ log(pop) + avginc + shall + log(mur) + log(rob) + stateid, data=guns.data)
+howxmatdiffers1j <- "We have a matrix now that contains 22 rows of input for each state ID and 22 rows without a stateID. We have rows of data correlated with the value 1 for each stateID column."
+
+```
+
+
+# Part two: Least squares regression mechanics
+
+In this more advanced section, you are supposed to create your own algorithms for some standard statistics of a fitted linear regression model from scratch. You are only allowed to use matrix and scalar operations like
+```{r ,echo=FALSE}
+cat("solve(), inv(), t(), %*%, /, sum(), mean(), rep()")
+```
+
+to manually produce results otherwise produced by the `lm()`-command.
+
+
+## Task 2a)
+Build a function that takes the two arguments` X` and ` y` and that returns the least squares
+estimate $\hat{\beta}$ of the slope coefficients on ` X`.
+```{r , echo=T}
+#X <- matrix(data = c(1,1,1,1,3,5), ncol = 2)   #test inputs
+#y <- c(4.8, 11.3, 17.2)                        #test outputs
+#lm.example <- lm(y ~ X)                        #to test example data and matrix functions
+
+estimate.beta <- function(X, y){
+    mult.XtX <- solve(t(X) %*% X)
+    mult.Xty <- t(X) %*% y
+    beta <- mult.XtX %*% mult.Xty
+return(beta)
+}
+
+```
+
+## Task 2b)
+Build a function that computes the model residuals as an object called `res`. Refer to the previous function `estimate.beta` to get an estimate of the slope coefficients.
+```{r , echo=T}
+estimate.residual <- function(X, y){
+    res <- y - X%*%estimate.beta(X, y) #
+return(res)
+}
+
+```
+
+
+## Task 2c) 
+Build a function that computes $R^2$, i.e. the estimated proportion of variance of $y$ that is explained by the model inputs. Refer to `estimate.residual` to get model residuals. 
+```{r , echo=T}
+estimate.R2 <- function(X, y){
+    est_var <- sum(estimate.residual(X,y)^2)
+    data_var <- sum((y - mean(y))^2)
+    R2 <- 1 - est_var/data_var
+    return(R2)
+}
+
+```
+
+
+## Task 2d)
+Next, prepare the inputs that we can feed into our functions. Construct an input matrix `X2d` containing the following variables from `guns.data` as columns: 
+
+* a vector of ones, 
+* the logarithm of state population, 
+* average per capita income, 
+* shall-carry law in effect, 
+* log murder rates, 
+* log robbery rates. 
+
+Additionally, create an output vector `y2d` containing the log violent crime rate (for the state that year).
+```{r , echo=T}
+
+X2d <- matrix(data = c(rep(x=1, times = sum(1-is.na(guns.data$year)*1)), 
+                       log(guns.data$pop), guns.data$avginc, 
+                       guns.data$shall, log(guns.data$mur), 
+                       log(guns.data$rob)), ncol = 6)
+y2d <- matrix(data = log(guns.data$vio), ncol = 1)
+
+```
+
+## Task 2e)
+The set of predictors created in Task 1j allows you to use the set of functions for fitting a linear regression model that you wrote in Part 1 of this assignment. We will confirm this by using the ` estimate.R2` function written in Task 1c. 
+
+Use ` y2d`, `X2d` and `estimate.R2` to obtain the R2 of the model specification of Task 1a. Additionally, use the matrix `inputs1j` to get an R2 for the model in Task 1i. How did inclusion of `stateid` affect the capability of a linear regression to explain variation in violent crime rates in the sample used for fitting the model? Please provide a precise answer.
+```{r, echo=TRUE}
+lm.R2_withstate2e   <- estimate.R2(inputs1j, y2d)
+lm.R2_nostate2e     <- estimate.R2(X2d, y2d)
+print(c(lm.R2_withstate2e,lm.R2_nostate2e ))
+effect_of_stateid2k <- "We improved our predictions (R^2 increased closer to 1) with the inclusion of the state ID"
+```

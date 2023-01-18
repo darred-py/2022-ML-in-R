@@ -1,0 +1,334 @@
+---
+title: "Assignment 2"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Preamble: Predicting purchases in online shops. 
+This assignment will be based on a dataset on online shopper purchase data which is available on the UC Irvine Machine Learning Library. A description of all variables is available [here  ](https://www.kaggle.com/henrysue/online-shoppers-intention). Among the 11 variables in the dataset, we will only use the three following:
+
+ - **Revenue**: (TRUE/FALSE) Whether a purchase was made by a visitor to the online shop
+ - **ProductRelated_Duration**: (numerical) Time spend on pages relevant/related to the product in question.
+ - **ExitRate**: (numerical) The percentage of visits to the online shop that end with visiting the site of the product at issue.
+
+## Part 0: Preparing the data
+
+Load the data into R and save it in an object called ´ shoppers´. The dataset is contained in a comma-separated spreadsheet. Accordingly, you will need to use the ´ read.csv()´ command in R.
+
+```{r, echo=TRUE}
+
+shoppers <- read.csv("online_shoppers_intention.csv")
+
+```
+
+In the steps below, we will train a quite small logistic regression model with `Revenue` as output variable and the following inputs (in addition to the intercept):
+
+1. ` ExitRate ` without further transformation
+2. The (natural) logarithm of ` ProductRelated_Duration + 1 `
+
+
+## Part 1: Logistic regression with ` glm() `
+
+In this basic part, we are getting some experience with ` glm() ` which is the most popular canned routine for learning GLMs.
+
+### Task 1a)
+First, we need to prepare our data. Conduct the following steps:
+
+1. Use the `names()` command to change the variable name of `ExitRate` in `shoppers`  to `ER`. 
+2. Create a new variable `lPR_Dur` inside `shoppers` that contains the (natural) logarithm of ` ProductRelated_Duration + 1`.
+
+``` {r, echo=TRUE}
+
+shoppers.col <- names(shoppers)
+shoppers.col[8] <- 'ER'
+colnames(shoppers) <- shoppers.col
+
+shoppers <- data.frame(shoppers, 'lPR_Dur' = log((shoppers$ProductRelated_Duration+1)))
+```
+
+### Task 1b)
+
+The `glm()` function requires you to state a distribution for your output variable. This is done by specifying the "family"-argument in `glm()`. Read the "family" help file to figure out which distributions are available. Which option do you choose if your next step is to learn a logistic regression? Write your answer into the file `whichfamily1b`.
+
+Then use the ` glm() ` command to learn a logistic regression model with `Revenue` as output variable and  ` ER `, a second-order polynomial of ` lPR_Dur ` and a constant as inputs. To include the aforementioned second-order polynomial, use the ` poly() ` command in the formula-part of `glm()`.
+Save the vector of coefficient estimates in an object `betahat1b`.
+ 
+
+``` {r, echo=T}
+
+whichfamily1b <- "binomial"
+glm.fit1b     <- glm(Revenue ~ ER + poly(x = lPR_Dur, degree = 2), family = 'binomial',data = shoppers)
+betahat1b    <- coef(glm.fit1b)
+print(betahat1b)
+
+```
+
+### Task 1c) 
+A fundamental principle of machine learning is that we divide the data available to us into different sets which we use learning, model tuning and algorithm choice. Use the ` dim() ` command to save the number of observations in `shoppers ` in an object called ` nobs `. Then, use the ` sample() ` command to randomly draw `nobs/2` numbers (without replacement) from the integers ` 1,2,...,nobs` and save this draw as an object `train`.
+
+*Note*: The command ` set.seed(1) ` specifies which sequence of (quasi-) random numbers we will draw and should ensure that you all arrive at the same training set.
+
+
+``` {r, echo=TRUE}
+set.seed(1)
+nobs  <- dim(shoppers)[1]
+train <- sample(x = 1:nobs, size = nobs / 2)
+
+```
+
+
+### Task 1d)
+The vector `train` contains the index number of observations that we allocated to the training data. If we use it to specify the rows of `shoppers ` within the square brackets that we use for indexing, we are directly getting training data. Knowing this, please refit the model from Task 1a on your training set.
+
+``` {r, echo=TRUE}
+glm.fit1d <- glm(Revenue ~ ER + poly(x = lPR_Dur, degree = 2), family = 'binomial', data = shoppers[train,])
+```
+
+### Task 1e) 
+Now that we have fitted our model, we want to evaluate its predictive performance on hold-out validation data. In the following, we call this hold-out validation data simply *test data*. 
+
+Before we can evaluate model performance, we first need to obtain predicted probabilities for purchases on the test data. Use the ` predict() ` command to obtain such predicted conditional probabilities from the model fit in Task 1c on the observations in our test set.
+
+*Note*: The test set consists of the observations that are not in our training set. Use this statement formally when setting the row indexes of `shoppers ` for the `newdata ` option of `predict()`.
+
+``` {r, echo=TRUE}
+glm.prob1e <- predict(object = glm.fit1d, newdata = shoppers[-train,], type="response")
+```
+
+### Task 1e+)
+When predicting from an object created by `glm()`, we used the additional option `type="response"`. What does this lead to? Provide a specific answer for the logistic regression model.
+
+``` {r, echo=TRUE}
+
+predictglm_type1e = "Type 'response' is used return predicted conditional probabilities in form of P(Y=1 | X)"
+
+```
+
+### Task 1f)
+In a next step, we apply a classification rule to map our predicted probabilities into class predictions. Our classification rule is to predict the most likely class.
+
+First, create a new vector ` glm.pred1f ` which has as many elements as ` glm.prob1e ` and which consists entirely of the logical statement `FALSE` (without citation marks!) 
+
+Second, replace the zeros in ` glm.pred1f ` with `TRUE` for all elements where the corresponding predicted probability exceeds the threshold used for the classifier mentioned above. The way in which we do this is to select elements of `glm.pred1f` by putting a true-or-false (or logical) statement into square brackets. The elements where the statement is true will be changed to 1.
+Please additionally write the true-or-false statement that you use into the string variable ` logical1f ` for the sake of making assignment evaluation simpler for us.
+ 
+
+``` {r echo=TRUE}
+
+glm.pred1f     <- rep(x = FALSE, times = length(glm.prob1e))
+glm.pred1f[glm.prob1e > 0.5] <- TRUE
+
+logical1f      <- "For a given matching index [i] between glm.pred1f and glm.prob1e, if value greater than 0.5 in glm.prob1e[i] assign TRUE to glm.pred1f[i]"
+
+```
+
+
+### Task 1g)
+Choose an appropriate error function and write its name in the string variable `chosenerrfun1g`. Then, use the objects created in the previous tasks of this part to obtain (overall) test error for the logistic regression model fitted in Task 1d.
+
+``` {r, echo=TRUE}
+chosenerrfun1g <- "misclassification rate"
+testerr1g    <- 1 - mean(!shoppers$Revenue[-train] & !glm.pred1f)
+
+```
+
+
+## Part 2: Class-specific prediction errors
+
+This part is more advanced than parts 1 and 3. In classification problems, overall test error may not always be our primary concern. To get a more differentiated picture, confusion matrices and the ROC curve are useful tools. We will get both using the `ROCR` package which calculates a large number of performance criteria for binary classification
+
+``` {r, echo=FALSE, warning = FALSE}
+library(ROCR)
+```
+
+### Task 2a)
+
+The fundamental object of `ROCR` containing information about correct and incorrect classifications is the "prediction object". It is created using the `prediction()` command with two inputs:
+
+1. The predicted probabilities for class 1 on the test set.
+2. The test outcomes
+
+Create such a prediction object.
+
+``` {r, echo=TRUE}
+glm.rocrpred2a <- prediction(predictions = glm.prob1e, shoppers$Revenue[-train])
+
+```
+
+
+### Task 2b)
+ROCR's prediction object contains counts of correct and incorrect predictions for all possible classification rule thresholds ("cutoffs"). We can see that by printing the names of elements within that object:
+
+``` {r, echo=TRUE}
+slotNames(glm.rocrpred2a)
+
+```
+
+Below, I prepared a function that takes a ROCR prediction object as well as a desired  threshold probability for the classification rule and returns a list object containing the corresponding confusion matrix, TPR, FPR and overall classification error. All that is left for you is the following tasks:
+
+1. Specify the object inside `ROCRpred` from which we take values for the elements in the confusion matrix  `cmat`. Choose correctly between `fp`, `tp`, `tn` and `fn` to match the row and column names that I specified.
+2. Use the four elements of `cmat` to calculate `FPR`, `TPR` and the classification error `error`.
+
+``` {r, echo=TRUE}
+performancemetrics <- function(ROCRpred, cutoff) {
+# Don't change the 5 rows below
+index          <- max(which((ROCRpred@cutoffs[[1]]-cutoff)>0))
+cmat           <- matrix(NA, nrow=2, ncol=2)
+colnames(cmat) <- c("yhat=F", "yhat=T")
+rownames(cmat) <- c("y=F", "y=T")
+
+# Change stuff below this line
+cmat[1,1]      <- ROCRpred@tn[[1]][index] #Replace ?? with one of fp, tp, tn, fn
+cmat[2,2]      <- ROCRpred@tp[[1]][index]
+cmat[2,1]      <- ROCRpred@fn[[1]][index]
+cmat[1,2]      <- ROCRpred@fp[[1]][index]
+# 
+FPR   <- cmat[1,2] / sum(cmat[1,])
+TPR   <- cmat[2,2] / sum(cmat[2,])
+error <- (cmat[1,2] + cmat[2,1]) / sum(cmat[])
+# 
+#   # Don't change the two lines below
+allresults <- list(confusionmatrix = cmat, FPR=FPR, TPR=TPR, errorrate=error)
+return(allresults)
+}
+
+```
+
+### Task 2c)
+
+Now use save the output of `performancemetrics()` with the prediction object of task 2a and a threshold probability of 50% as input. Additionally, answer two questions:
+
+1. Are you satisfied with the overall accuracy with which our model predicts purchases?
+2. Is the accuracy with which observed purchases are correctly predicted satisfactory? Assume here that we have considerable interest in predicting actual purchases correctly.
+
+``` {r, echo=TRUE}
+
+metrics2c <- performancemetrics(glm.rocrpred2a,0.5)
+overall_acc_verdict2c      <- "No not satisfied. 15% error rate is still high."
+obs_purchase_acc_verdict2c <- "No not satisfied. Most predicted purchases fall under false negative."
+metrics2c
+``` 
+
+### Task 2d)
+
+Assume we would like to get a classifier that has relatively balanced class-specific performance. In other words, we want to choose a threshold such that TPR is approximately 1-FPR. In order to see the trade-offs that are available to us, we will look at a ROC curve.
+
+In order to plot a ROC curve, we first need to create a ROCR performance object containing the TPR and FPR. Do this by using the `performance()` object with the following inputs
+
+1. The ROCR prediction object to be evaluated
+2. The first performance measure (see R help)
+3. The second performance measure (see R help)
+
+Next, plot the resulting ROCR performance object. This will give you a (nicely colored) ROC curve. Answer the following questions:
+
+1. Where in the plot do you see the combination of TPR and FPR obtained in Task 2b?
+2. Which threshold should we choose to get the balanced class-specific performance described above. You may eyeball an approximate value from the ROC curve and use the `performancemetrics()` function to arrive at a more refined choice. Two decimals are enough (e.g. 0.54).
+
+``` {r, echo=TRUE}
+ROCdata2d         <- performance(glm.rocrpred2a, measure = "tpr", x.measure = "fpr")
+plot(ROCdata2d,colorize=TRUE)
+whereis_2bcombo2d <- "In the lower left of the graph, in the orange section of the line"
+
+#perf_R <- 0.18
+#abs(1-performancemetrics(glm.rocrpred2a, perf_R)$FPR - performancemetrics(glm.rocrpred2a, perf_R)$TPR)
+
+optimal_cutoff2d  <- "We should choose a threshold of 0.18 because the described performance (TPR - (1-FPR)) is minimized"
+
+```
+
+### Task 2e)
+To what extend does our chosen threshold from Task 2d compromise overall accuracy? The ROCR package allows us to generate graphics which may help to find an answer. To arrive there, first create a new ROCR performance measure from the ROCR prediction object of Task 2a whose only measure is accuracy. 
+Then, plot this new object.
+
+``` {r, echo=TRUE}
+
+accdata2e <- performance(glm.rocrpred2a,measure = "acc")
+plot(accdata2e)
+is_accuracy_compromised2e <- "Using a cutoff value of 0.18 leads to a compromise on accuracy to about 0.6, compared to using a threshold of 0.5 and having an accuracy of greater then 0.8"
+
+```
+
+
+## Part 3: Multiclass logistic regression with `glmnet()`
+
+Logistic regression with more than two classes is unfortunately not implemented in `glm()`. Among the alternative options, the most suitable for machine learning applications is the *glmnet* library.
+
+The data we are using to learn a multiclass logistic regression is drug consumption data. Our response variable is usage of drugs (Cocaine , Crack, Ecstasy, and Heroin) and we have three possible responses, "never used", "used more than a year ago", and "used within a year". As explanatory variables we have personality test data, demographic data, and consumption of chocolate, alcohol, and nicotine.
+
+### Task 3a)
+
+Conduct the following steps to prepare your data:
+
+1. Load `drug_train.RDS` using the command `readRDS()` and save it as a data frame `drug.data`. 
+2. Extract the variable *drugs.usage* into a vector called `y3a`
+3. Use `model.matrix()` command to create an input variables matrix `X3a` of a regression model that uses all other variables in `drug.data` as inputs. No intercept here (`glmnet()` adds this automatically).
+
+``` {r, echo=TRUE}
+
+drug.data <- readRDS("drug_train.RDS")
+X3a       <- model.matrix(~., data = drug.data[1:16])
+y3a       <- drug.data$drugs.usage
+
+```
+
+### Task 3b)
+
+Use the `glmnet()` command to learn a multiclass logistic regression model and save the learned model as `mlogit.fit3b`. The syntax of this model is a bit different from that of `glm()`. Please read the corresponding help file to figure out how to specify inputs and output and how to ensure you get a multiclass logistic model. Please also set `lambda=0` to ensure that we don't regularize the model.
+
+``` {r, echo=TRUE}
+library(glmnet)
+mlogit.fit3b <- glmnet(X3a, y3a, family = 'multinomial', lambda = 0)
+
+```
+
+### Task 3c)
+
+We now skip the entire data splitting step that we discussed in Part 1. Instead, we say that model `mlogit.fit3b` is our result of the entire modeling process and it is implemented in practice. We now get new test data for which we obtain output predictions. To prepare this, conduct the following steps:
+
+1. Load *drug_test.RDS* as object `drug.data.test`.
+2. Create an input variable matrix `Xtest3c` in the same way as in Task 3a, but using `drug.data.test` instead of `drug.data.train`.
+
+
+``` {r, echo=TRUE}
+
+drug.data.test <- readRDS("drug_test.RDS")
+Xtest3c <- model.matrix(~., data = drug.data.test[1:16])
+
+```
+
+### Task 3d)
+
+Use the `predict` command to get predictions from model `mlogit.fit3b` for your test data. Do this in three different ways by specifying values `"link"`, `"response"` and `"class"` for the option `type`. Save your predictions as `mlogit.predlink3c`, `mlogit.predresp3c` and `mlogit.predclass3c`.
+
+Now open the slides to Lecture 3. Which components of the GLM framework discussed there do your three types of predictions provide? Write your answer into the string variable `predtypes3d`.
+
+``` {r, echo=TRUE}
+
+mlogit.predlink3c  <- predict(object = mlogit.fit3b, newx = Xtest3c, type = 'link')
+mlogit.predresp3c  <- predict(object = mlogit.fit3b, newx = Xtest3c, type = 'response')
+mlogit.predclass3c <- predict(object = mlogit.fit3b, newx = Xtest3c, type = 'class')  
+ 
+predtypes3d <- "We the conditional probabilities supplied by response, 'link' returns the outputs of the link functions that maps the non-linear inputs to the output, and 'class' returns the predicted classifer for each input"  
+
+```
+
+### Task 3e) 
+
+As time passes, you also observe outputs for your first batch of test data. This allows you to evaluate the accuracy of your prediction model during deployment. The variable *drugs.usage* in `drug.data.test` contains these test outputs. Extract them into a vector `ytest3e`.
+
+The *glmnet* library also contains a function `confusion.glmnet()` which creates a confusion matrix for you. Read the help file for this function and construct such a confusion matrix for your test data. Save the confusion matrix as object `confusion3e`  
+
+
+``` {r, echo=TRUE}
+ 
+ytest3e     <- drug.data.test$drugs.usage
+confusion3e <- confusion.glmnet(mlogit.fit3b, newx = Xtest3c, newy = ytest3e, family = 'multinomial')
+print(confusion3e)
+ 
+```

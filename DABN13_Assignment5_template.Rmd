@@ -1,0 +1,347 @@
+---
+title: "Assignment 5"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In line with Lecture 7, Assignment 5 is somewhat more technical. This means there are no basic warm-up tasks since even the use of a canned routine for optimization requires us to write a function for our cost function.
+
+Still, this assignment covers frequently occurring coding tasks in the context of function optimization. That is, you will write many functions, transfer a lot of mathematical expressions from the lecture slides into this script, create some simple plots and, most importantly, spend far too much time on trying to figure out what is wrong with your code. On the upside, this assignment gives you a little more freedom to write code in your own way. Enjoy!
+
+## Preamble: Preparing the data
+
+We are going to recycle a dataset on purchases in online shops that we already used in Assignment 2. Load the data into R and save it in an object called `shoppers`. The dataset is contained in a comma-separated spreadsheet. Accordingly, you will need to use the ´ read.csv()´ command in R.
+
+```{r, echo=TRUE}
+shoppers <- read.csv("online_shoppers_intention.csv")
+
+```
+
+In the steps below, we will fit a quite small logistic regression model including the following variables in addition to the intercept:
+
+1.  `ExitRate` without further transformation
+2.  The (natural) logarithm of `ProductRelated_Duration + 1`
+
+The code below does all data transformations for you. However, please note the shortened variable names that we are going to use from now on.
+
+```{r, echo=TRUE}
+
+X <- model.matrix(Revenue ~ ExitRates + log(1 + shoppers$ProductRelated_Duration), data=shoppers) 
+X <- as.matrix(X)
+colnames(X) <- c("intercept", "ER", "lPR_Dur")
+y           <- rep(1, times=dim(X)[1])
+y[shoppers$Revenue==FALSE] <- -1
+
+```
+
+## Part 1: Learning logistic regression without `glm()`
+
+### Task 1a)
+
+If we want to learn a logistic regression manually, we need to specify the cost function that we are going to minimize So as a first step, create a function `cost_logistic_1a()` whose inputs are
+
+1.  coefficients `theta`,
+2.  an $n$ vector of outputs `y`,
+3.  an $n \times p$ matrix of inputs `X`.
+
+The function is then supposed to return the cost on the data consisting of `y` and `X` with logistic loss and coefficient vector values `theta`.
+
+```{r echo=T}
+cost_logistic_1a <- function(theta, y, X){
+    n <- length(y) #Optimized code so that y mults across with X while X is inner mult.ed by theta
+    cost <- colMeans(log(1 + exp(-y * X %*% theta))) #Using colSums to allow input of theta matrix which then outputs matrix
+    return(cost) #scalar value
+}
+
+# cof_test <- c(1,1,1)
+# # cof_test <- matrix(data=c(0,0,0),byrow=F)
+# cost_logistic_1a(cof_test,y,X)
+
+```
+
+### Task 1b)
+
+As a next step, we need a function that returns the gradient of the cost function. Write such a function `grad_logistic_1b()` that takes the same arguments as `cost_logistic()` and which returns a $p \times 1$ vector containing the gradient of our cost function. Use the `matrix()` command to ensure that the dimensions of the returned vector are correct.
+
+```{r }
+
+grad_logistic_1b <- function(theta, y, X){
+    n <- length(y)
+    div <- as.vector((1 + exp(y * X %*% theta))^-1) #Same optimization method as cost_logistic_1a. This preserves the + & * of 1/exp(x) but avoids for-loop
+    cost <- -t(y) %*% (div * X) #(div * X) accomplishes the same outcome as a for-loop over 1:n of y_i * X_i / 1+exp(~)
+    return(matrix(cost/n,byrow = F)) #returns Px1 vector
+}
+
+```
+
+### Task 1c)
+
+R provides you with a canned routine for optimization: The `optim()` command. `optim()` minimizes a function that you feed into it. It also allows you to provide a gradient function to speed up optimization and to achieve better numerical stability in complicated cases.
+
+`optim()` allows you to choose from several algorithms from the very broad literature on optimization methods. We are going to use the `BFGS` method which is a very popular modification of Newton's method.
+
+Now use `optim()` to minimize `cost_logistic_1a` on your training data. Follow the instructions below:
+
+1.  Let all initial coefficient values be zero.
+2.  Choose the BFGS minimization method.
+3.  Supply your gradient function `grad_logistic_1b` as well. If you could not solve Task 1b, leave out the gradient.
+4.  Specify input `y` and outputs `X` as additional arguments of `optim()`. You *must* assign them the name that they have inside your functions `cost_logistic_1a()` and `grad_logistic_1b`.
+5.  Feed the optimization controls `optim_ctrl_1c` that I already specified in the code chunk below to `optim()`
+
+Save the resulting list object as `optim_result_1c`.
+
+```{r }
+# theta = c(0,0,0)
+optim_ctrl_1c     <- list(maxit=10000, reltol=1e-16)
+optim_result_1c <- optim(par = c(0,0,0), 
+                         fn = cost_logistic_1a, 
+                         gr = grad_logistic_1b,
+                         control=optim_ctrl_1c,
+                         method = 'BFGS',
+                         y=y,X=X) #inputs for our functions fn & gr
+```
+
+### Task 1d)
+
+Have a closer look at the list object `optim_result_1c`. What do its different components tell us about our solved minimization problem? Explain this in your *own* words by writing explanations into the four string variables below.
+
+```{r }
+
+whatis_par_1d <- "$par represents the best set of parameters found" 
+whatis_value_1d <- "$value represents the value of our function cost_logistic_1a with theta equal to the best set of parameters"
+whatis_counts_1d <- "$counts represents a vector of iterations for both our function an gradient, respectively"
+whatis_convergence_1d <- "$convergence represents if the optimization method was successful or not. 0 means yes."
+
+```
+
+## Part 2: Gradient descent manually
+
+In this part, you are going to write your own routine for gradient descent.
+
+### Task 2a)
+
+Below, I have prepared a fragment of a function that is supposed to conduct gradient descent. This function, `grad_desc_2a`, takes the following inputs:
+
+-   `par`: The vector of initial coefficient values
+-   `fn`: The objective function
+-   `gr`: The gradient of the objective function
+-   `stepsize`: The step size
+-   `maxitr`: The maximum number of parameter updates. Default is set to 5000
+-   `tol`: The tolerance for coefficient updates to be considered "effectively 0". Default is set to 0.000001
+-   `y`: an $n$ vector of outputs
+-   `X`: an $n \times p$ matrix of inputs.
+
+Additionally, the function already contains the following objects:
+
+-   `coef_path`: A matrix whose columns eventually contain the entire sequence of coefficient vectors,
+-   `coef_upd`: A matrix whose columns eventually contain the entire sequence of coefficient updates,
+-   `fn_path`: A vector that eventually contains all values of the objective function.
+
+Your task is to write code that conducts the coefficient updates of gradient descent until the Euclidean norm of a coefficient update is below the tolerance level `tol`.
+
+The full sequence of coefficient vectors, coefficient updates and function values should be saved in the objects `coef_path`, `coef_upd` and `fn_path`, respectively. Maximally `maxitr` coefficient updates should be made (fewer if coefficient updates are below tolerance).
+
+```{r }
+ 
+grad_desc_2a <- function(par, fn, gr, stepsize, maxitr=5000, tol=1e-6, y, X) {
+
+  # Don't change anything here
+    coef_path <- matrix(par, nrow=length(par), ncol=1)
+    coef_upd  <- matrix(NA, nrow=length(par), ncol=0)
+    fn_path   <- fn(theta=par, X=X, y=y)
+  
+  # Start writing stuff here
+    #coef_upd <- cbind(coef_upd, coef_path[,1,drop=F] - stepsize * gr(coef_path[,1,drop=F],y,X))
+    coef_upd <- cbind(coef_upd,
+                      coef_path[,1] - stepsize * gr(coef_path[,1], y, X))
+    i <- 1
+    
+    while (i < maxitr) #Keeps iterations below set max iteration
+        {
+        if (norm(coef_upd[,i] - coef_path[,i],type='2') < tol){break} #checks if diff between theta_t and theta_t+1 is small
+        else{
+            coef_path <- cbind(coef_path,  #Adds last coefficient update to path
+                               coef_upd[,i,drop=F]) 
+            
+            coef_upd  <- cbind(coef_upd,   #Calculates new coefficient update
+                              coef_upd[,i,drop=F] - stepsize * gr(coef_upd[,i,drop=F],y,X))
+            
+            i <- i + 1
+            }
+        }
+    itr <- i #number of total iterations
+    fn_path <- fn(coef_path, X=X, y=y) #matrix of fn outputs with respect to coef_path
+    
+  # Don't change anything here
+    returnobj <- list(coef_final = coef_path[,ncol(coef_path)],
+                      itr        = itr,
+                      coef_path  = coef_path,
+                      updates    = coef_upd,
+                      fun_path   = fn_path)
+  return(returnobj)
+}
+
+```
+### Task 2b)
+
+Now we tune the step size of gradient descent. In order to do this, write a function `plot_cost_2b` which runs gradient descent with a chosen step size and only 100 coefficient updates. The function should then create an object containing a line plot of the number of coefficient updates against the cost at the specific update. This line plot object is to be returned by the function.
+
+I have already prepared a list object `gd_ctrl_2b` for you that contains the gradient descent function as well as most inputs to this function. Use `gd_ctrl_2b` as an input and define further arguments to your step size as well as the data.
+
+Once you have created `plot_cost_2b`, play around with different step sizes. Save a plot with a step size that you deem as too low (high) as object `plot_tooLO_2b` (`plot_tooHI_2b`). Save another plot `plot_decent_2b` which contains the development of cost with a good step size.
+
+```{r }
+
+library(ggplot2)
+
+gd_ctrl_2b <- list(par=c(0,0,0),
+                fn=cost_logistic_1a,
+                gr=grad_logistic_1b,
+                gd_fun=grad_desc_2a,
+                maxitr=100,
+                X = X, y = y)
+
+
+plot_cost_2b <- function(par, fn, gr, gd_fun, stepsize, maxitr = 100, tol = 1e-6, X, y){
+    var_list <- gd_fun(par=par, fn=fn, gr=gr, stepsize=stepsize, maxitr=maxitr, tol, y=y, X=X) #Calc. iterations and cost func path
+    df <- data.frame(iteration = 1:var_list[[2]], cost = c(var_list[[5]])) #Creates datafram to be used in ggplot
+    ggplot(df, aes(x = iteration, y=cost)) +
+        geom_line()
+}
+
+# do.call(plot_cost_2b, c(gd_ctrl_2b, stepsize=0.5))
+plot_tooLO_2b  <- do.call(plot_cost_2b, c(gd_ctrl_2b, stepsize=0.001))
+plot_decent_2b <- do.call(plot_cost_2b, c(gd_ctrl_2b, stepsize=0.25))
+plot_tooHI_2b  <- do.call(plot_cost_2b, c(gd_ctrl_2b, stepsize=0.5))
+
+ggplot() +
+    geom_line(data = plot_tooLO_2b$data, aes(x = iteration, y=cost), col = 'blue') +
+    geom_line(data = plot_decent_2b$data, aes(x = iteration, y=cost), col = 'black') +
+    geom_line(data = plot_tooHI_2b$data, aes(x = iteration, y=cost), col = 'red') #Combining all plots into a single graph to show differences in size
+
+# plot_tooLO_2b
+# plot_decent_2b
+# plot_tooHI_2b
+```
+
+### Task 2c)
+
+Use the string variable `stepsize_motivate_2c` to motivate why you chose the three step size examples in Task 2b. More specifically, explain what lead you to the conclusion that a step size is too low or too high.
+
+```{r }
+
+stepsize_motivate_2c <- "I first chose 0.5 and realized that the cost function was oscillating. I then reduced the step size by half and saw that it quickly decreased to a value of below 0.5 and slowly coninued being optimized. I then chose 1/1,000 as the next step size becuase it is a generally accepted small number and saw that the graph was decreasing at a much slower rate than at stepsize=0.25"
+
+
+```
+
+### Task 2d)
+
+Use `grad_desc_2a` with your chosen step size to learn the coefficients of the logistic regression model that we have been working with so far. Keep the maximum number of updates at its default value. Save the resulting obect as `gd_result_2d`.
+
+Does gradient descent stop before the maximum number of updates? If not, how far does gradient descent get the cost function towards the value achieved by `optim()` in Task 1c? Write your answer into the string variable `gd_conclusion_2d`
+
+```{r }
+
+gd_result_2d <- grad_desc_2a(c(0,0,0), cost_logistic_1a, grad_logistic_1b, X=X, y=y, stepsize = 0.25)
+
+cost_logistic_1a(gd_result_2d$coef_final, y, X)
+cost_logistic_1a(optim_result_1c$par, y, X)
+
+gd_conclusion_2d <- "My gradient descent function does not stop before the max iteration of 5,000. On review, the grad_desc function optimized the coefficient to a difference of 0.0150 of the optimized coefficient from the optim() function"
+
+```
+
+## Part 3: Newton's method manually
+
+Given that you have implemented gradient descent in Part 2, you have already done most of the hard work that is required for Newton's method. After all, the only thing that differs is the expression for your coefficient update. For this reason, we will work on our own routine for Newton's method.
+
+### Task 3a)
+
+Newton's method is more demanding than gradient descent in that it requires us to obtain the Hessian of our objective function for any desired vector of coefficients. Write such as function `hessian_logistic_3a` which has the same arguments as `grad_logistic_1b` and which returns the hessian of your cost function with logistic loss.
+
+```{r }
+
+hessian_logistic_3a <- function(theta, y, X){
+    n <- length(y)
+    mult <- mean(y * y * exp(y * X %*% theta) / (1 + exp(y * X %*% theta))^2) #Same optimization method as cost_logistic_1a. This preserves the + & * of 1/exp(x) but avoids for-loop #Note that this multiplication is the same as sech(x)/2
+    cost <- t(X) %*% (as.numeric(mult) * X/n) #mult accomplishes the same outcome as a for-loop over 1:n of y_i * X_i / 1+exp(~)
+    return(matrix(cost, ncol = dim(X)[2])) #returns PxP matrix
+}
+
+# hessian_logistic_3a(c(0,0,0), y, X)
+# pracma::hessian(cost_logistic_1a, x0 = c(0,0,0), X=X, y=y)
+
+```
+
+### Task 3b)
+
+Modify `grad_desc_2a` to turn it into a function for Newton's method. This only requires you to remove step size from the function arguments, to add a new argument for the Hessian and to change the line for your coefficient update. Save your function as object `newton_3b`.
+
+```{r }
+
+newton_3b <- function(par, fn, gr, hs, maxitr=5000, tol=1e-6, y, X) {
+
+  # Don't change anything here
+    coef_path <- matrix(par, nrow=length(par), ncol=1)
+    coef_upd  <- matrix(NA, nrow=length(par), ncol=0)
+    fn_path   <- fn(theta=par, X=X, y=y)
+  
+  # Start writing stuff here
+    # coef_upd <- cbind(coef_upd, coef_path[,1,drop=F] - stepsize * gr(coef_path[,1,drop=F],y,X))
+    coef_upd <- cbind(coef_upd,
+                      coef_path[,1] - solve(hs(coef_path[,1], y, X)) %*% gr(coef_path[,1], y, X))
+    i <- 1
+    
+    while (i < maxitr) #Keeps iterations below set max iteration
+        {
+        if (norm(coef_upd[,i] - coef_path[,i],type='2') < tol){break} #checks if diff between theta_t and theta_t+1 is small
+        else{
+            coef_path <- cbind(coef_path,  #Adds last coefficient update to path
+                               coef_upd[,i,drop=F]) 
+            
+            coef_upd  <- cbind(coef_upd,   #Calculates new coefficient update
+                              coef_upd[,i,drop=F] - solve(hs(coef_upd[,i], y, X)) %*% gr(coef_upd[,i,drop=F],y,X))
+            
+            i <- i + 1
+            }
+        }
+    itr <- i #number of total iterations
+    fn_path <- fn(coef_path, X=X, y=y) #matrix of fn outputs with respect to coef_path
+    
+  # Don't change anything here
+    returnobj <- list(coef_final = coef_path[,ncol(coef_path)],
+                      itr        = itr,
+                      coef_path  = coef_path,
+                      updates    = coef_upd,
+                      fun_path   = fn_path)
+  return(returnobj)
+}
+
+```
+
+### Task 3c)
+
+Use your function `newton_3b` to learn the logistic regression model that you already learned in Tasks 1c and 2d. Keep the maximum number of updates at its default value. Save the resulting obect as `nm_result_3c`.
+
+Does Newton's method stop before the maximum number of updates? If not, how far does gradient descent get the cost function towards the value achieved by `optim()` in Task 1c? What is your verdict about the performance of Newton's method relative to gradient descent and the `optim()` command in the case of logistic regression? Write your answer into the string variable `nm_conclusion_3c`.
+
+```{r }
+
+nm_result_3c <- newton_3b(par = c(0,0,0),
+          fn = cost_logistic_1a,
+          gr = grad_logistic_1b,
+          hs = hessian_logistic_3a,
+          y = y, X = X)
+
+# nm_result_3c$itr
+plot(nm_result_3c$fun_path, type='l')
+
+nm_conclusion_3c <- "Yes it stopped at iteration 177. Newton's method performs superbly in comparison to Gradient Descent and returns nearly the same coefficients as the optim() function while performing a lot less iterations (177 vs 5,411)"
+
+```

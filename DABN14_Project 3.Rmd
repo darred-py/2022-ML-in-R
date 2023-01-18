@@ -1,0 +1,486 @@
+---
+title: "Project 3"
+subtitle: "DABN14"
+author: "Daniel Arredondo"
+date: "`r Sys.Date()`"
+papersize: a4
+geometry: margin=4cm
+colorlinks: true
+output:
+  pdf_document:
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library("doSNOW")
+library("doParallel") 
+# library("doMPI")
+library("DoubleML")
+library("glmnet")
+```
+
+# Causal Analysis
+
+## Part 1: Double ML vs. naive estimation
+
+Do we really need the rather elaborate DML procedure if we want to conduct statistical inference on treatment effects together with ML algorithms? Why not simply take estimated coefficients from a regularized model? In this part, we are going to explore the merits of Double ML in a simulation study. We are going to draw a large number of samples from the data generating process (DGP) $$ 
+y_i = \theta_0 d_i + g_0(\mathbf{x}_i) + u_i \\
+d_i = m_0(\mathbf{x}_i) + v_i,
+$$where $u_i \sim \mathcal{N}(0,1)$, $v_i \sim \mathcal{N}(0,1)$ and $x_i \sim \mathcal{N}(\mathbf{0}_p, \boldsymbol{\Sigma})$. The entries of $\boldsymbol{\Sigma}$ are given by $\boldsymbol{\Sigma}_{kj} = 0.7^{|j-k|}$. The functions involving the covariates are given by $$
+g_0(\mathbf{x}_i) =  \frac{\exp(x_{i,1})}{1+\exp(x_{i,1})} + 0.25 x_{i,3}, \\
+m_0(\mathbf{x}_i) = x_{i,1} + 0.25 \frac{\exp(x_{i,3})}{1+\exp(x_{i,3})},
+$$Luckily, you do not have to code this DGP manually. The `make_plr_CCDDHNR2018()` function in the `DoubleML` library automatically provides with a sample from this DGP. In the following tasks, we want to simulate samples with $N=500$ observations, a $7\times 1$ vector of covariates $\mathbf{x}_i$ and true treatment effect $\theta_0=0.5$ (specified as input `alpha` in `make_plr_CCDDHNR2018()`). The resulting data is to be returned as data frame. Please see the help file for `make_plr_CCDDHNR2018()` in order to implement these specifications.
+
+### Task 1.a
+
+A naive alternative to double ML would be to use the lasso to estimate a linear model that explains outcome $Y$ with the treatment variable $D$ as well as a third-order polynomial of the covariates $X$ (including all interactions). The extra-smart naive researcher making this modeling suggestion also recommends *not* to penalize the coefficient on $D$ in order to get an estimate with desirable statistical properties. Please argue why this latter idea might be perceived as reasonable by a naive researcher. Write your answer in the PDF file.
+
+```{r}
+# Lasso favors sparse models, meaning if D is not penalized, then unimportant covariates X will be reduced to zero while covariates that do explain Y well are kept along with D. The difference between the contribution of the covariates X and D can be understood as the effect of the treatment variable D.
+```
+
+### Task 1.b
+
+Now, write a function `MC.naive.1b()` that conducts the following steps 1000 times:
+
+1.  Use the function `make_plr_CCDDHNR2018()` simulate a dataset with the properties specified above Task 1.a.
+
+2.  Split the data into a subset $\mathcal{I}_1$ containing the first 250 observations in your data and a subset $\mathcal{I}_2$ containing the last 250 observations.
+
+3.  Use `cv.glmnet()` to tune and train the lasso with model specification as described in Task 1.a. That is, fit a predictive model for y in terms of the treatment variable $D$ and a third-order polynomial of all covariates $X$ (including interactions) on subset $\mathcal{I}_1$. The `poly()` command, applied to all covariates at once, allows you to do that. While you do this, note the following:
+
+    -   `D` must **not** be interacted with any of the covariates `X`.
+    -   The coefficient on $D$ must not penalized. You can achieve that by using the `penalty.factor` option of `glmnet()` which also works with `cv.glmnet()`.
+    -   Choose the tuning parameter value that minimizes the cross-validation estimate of test error.
+
+4.  Extract the estimated treatment effect from the fitted lasso model with optimal tuning parameter. Predict $Y$ on subset $\mathcal{I}_1$ using the model that we trained in step 3 and obtain the residuals $e_i$.
+
+5.  Continuing our analysis on subset $\mathcal{I}_1$. Conduct a t-test with 5% significance level whether the true treatment effect is 0.5 (which indeed is its value in the DGP)
+
+    -   Take the denominator of this t-test from a standard Eicker-Huber-White heteroskedasticity-robust variance estimator for the (non-zero) coefficients in the model. Let $\tilde{x}_i$ be the vector of covariates with **nonzero** coefficients in your fitted lasso model and $e_i$ the model residuals. Additionally, let $\mathbf{z}_i = \left( 1, d_i , \mathbf{\tilde{x}}_i^T \right)^T$. Then, the variance estimator is given by $$
+         Var \left(\hat{\boldsymbol{\beta}} \right) = \left( \sum_{i=1}^{N} \mathbf{z}_i \mathbf{z}_i^T \right)^{-1} \left( \sum_{i=1}^{N} \mathbf{z}_i  e_i^2  \mathbf{z}_i^T \right) \left( \sum_{i=1}^{N} \mathbf{z}_i \mathbf{z}_i^T \right)^{-1}.
+         $$
+
+6.  Save the following two objects in the corresponding row of a previously created $1000 \times 2$ matrix `naive.results`.
+
+    -   The estimated treatment effect coefficient which we extracted in Step 3.
+    -   A logical variable indicating whether the null hypothesis of the t-test in Step 4. was rejected (TRUE) or not (FALSE).
+
+The function `MC.naive.1b()` is supposed to return the $1000 \times 2$ matrix `naive.results` with values for all 1000 iterations of the simulation study.
+
+*Note*: I highly recommend using a `foreach` loop to conduct the simulations in `MC.naive.1b()` to speed up the simulations via parallel computing. Otherwise, the execution of `MC.naive.1b()` might take a looooooong time.
+
+```{r}
+
+MC.naive.1b <- function() {
+
+  # Write a loop for your MC study below
+  nsim <- 10^3
+  my.cores <- detectCores()
+  registerDoParallel(cores=my.cores)
+  naive.results <- foreach(itr = 1:nsim, .combine=rbind, .packages=c('glmnet', 'DoubleML')) %dopar% {
+  # Part 1
+  DML.sample <- make_plr_CCDDHNR2018(n_obs = 500,
+                                    dim_x = 7,
+                                    alpha = 0.5,
+                                    return_type = "data.frame")
+  
+  # Part 2
+  subset.1 <- DML.sample[1:250,]
+  subset.2 <- DML.sample[251:500,]
+  
+  # Part 3
+  Y <- as.vector(subset.1[,8])
+  X <- cbind(as.vector(subset.1[,9]), 
+             poly(as.matrix(subset.1[,1:7]), degree=3, simple=T))
+  excl.penalty <- c(0,rep(x=1, times=dim(X[,-1])[2]))
+  lasso.cv   <- cv.glmnet(x = X,
+                          y = Y,
+                          penalty.factor=excl.penalty,
+                          alpha=1,
+                          intercept = T)
+  # Part 4
+  lasso.coef <- coef(object = lasso.cv, s="lambda.min")
+  lasso.pred <- predict(object = lasso.cv, newx = X, s="lambda.min")
+  err.naive <- Y - lasso.pred
+  
+  # Part 5
+  nonzero.index <- which(lasso.coef != 0) - 1 #adjustment for intercept
+  thetahat <- as.numeric(lasso.coef[2])
+  Z <- t(cbind(1, X[,nonzero.index]))
+  n.Z <- dim(Z)
+  Z.m <- Z.m.e <- matrix(0, n.Z[1], n.Z[1])
+  for(i in 1:n.Z[2]){
+      Z.m <- Z.m + Z[,i] %*% t(Z[,i])
+      Z.m.e <- Z.m + Z[,i] %*% t(Z[,i]) * err.naive[i]^2
+  }
+  Z.m.inv <- solve(Z.m)
+  thetahat.var <- Z.m.inv %*% Z.m.e %*% Z.m.inv
+
+  test.rej   <- (abs((thetahat-0.5)/sqrt(thetahat.var[2,2])) > qnorm(0.975))
+
+  # Part 6
+  matrix(c(lasso.coef[1], test.rej),1,2)
+  }
+  
+  stopImplicitCluster()
+  return(naive.results)
+}
+```
+
+### Task 1.c
+
+Run the function `MC.naive.1b()` and save its output as matrix `naive.results.1c`. Then, do the following:
+
+1.  Calculate the mean of the column in `naive.results.1c` containing the logical variable for rejection of the null hypothesis and save it as `size.naive.1c`.
+
+2.  Calculate the mean of the column in `naive.results.1c` containing estimated treatment effect, subtract the true parameter value $0.5$ and save the result as `bias.naive.1c`.
+
+3.  Answer the following questions in the PDF file:
+
+    -   Is your naive estimator of the treatment effect $\theta_0$ unbiased?
+    -   Does a test with the null hypothesis $\mathbb{H}_0:\theta_0 = 0.5$ have rejection rates close to the nominal significance level?
+
+```{r}
+
+naive.results.1c <- MC.naive.1b()
+size.naive.1c    <- colMeans(naive.results.1c)[2]
+bias.naive.1c    <- colMeans(naive.results.1c)[1] - 0.5
+
+size.naive.1c
+bias.naive.1c
+```
+
+### Task 1.d
+
+Next, write a function `MC.DML.1d()` that conducts the following steps 1000 times:
+
+1.  Use the function `make_plr_CCDDHNR2018()` simulate a dataset with the properties specified above Task 1.a.
+
+2.  Split the data into a subset $\mathcal{I}_1$ containing the first 250 observations in your data and a subset $\mathcal{I}_2$ containing the last 250 observations.
+
+3.  Use `cv.glmnet()` train the lasso on subset $\mathcal{I}_2$ for two different models:
+
+    -   A linear model explaining $Y$ with a third-order polynomial of $X$ (including interactions).
+    -   A linear model explaining $D$ with a third-order polynomial of $X$ (including interactions).
+
+4.  Predict $Y$ and $D$ on subset $\mathcal{I}_1$ using the two models that we trained in step 3. The tuning parameter of the lasso models should be the one leading to the minimum cross-validation estimate of test error.
+
+5.  Obtain the differences between $Y,D$ on subset $\mathcal{I}_1$ and their respective predictions from step 4. Let these differences be denoted $\hat{U}$ and $\hat{V}$, respectively.
+
+6.  Estimate the treatment effect $\theta_0$ by regressing $\hat{U}$ on $\hat{V}$ (no intercept!).
+
+7.  Conduct a t-test with 5% significance level whether the true treatment effect is 0.5 (which indeed is its value in the DGP)
+
+    -   Take the denominator of this t-test from a standard Eicker-Huber-White heteroskedasiticty-robust variance estimator for $\hat{\theta}_0$. Its mathematical definition is given in the handout slide 14 (12 of 30).
+
+8.  Save the following two objects in the corresponding row of a previously created $1000 \times 2$ matrix `DML.results`.
+
+    -   The estimated treatment effect coefficient which we obtained in Step 6..
+    -   A logical variable indicating whether the null hypothesis of the t-test in Step 7. was rejected (TRUE) or not (FALSE).
+
+The function `MC.DML.1d()` is supposed to return the $1000 \times 2$ matrix `DML.results` with values for all 1000 iterations of the simulation study.
+
+```{r}
+
+MC.DML.1d <- function() {
+
+  # Write a loop for your MC study below
+  nsim <- 10^3
+  my.cores <- detectCores()
+  registerDoParallel(cores=my.cores)
+  DML.results <- foreach(itr = 1:nsim, .combine=rbind, .packages=c('glmnet', 'DoubleML'), .options.multicore) %dopar% {
+  # print('# Part 1')
+  DML.sample <- make_plr_CCDDHNR2018(n_obs = 500,
+                                    dim_x = 7,
+                                    alpha = 0.5,
+                                    return_type = "data.frame")
+  
+  # Part 2
+  ind.1 <- 1:250
+  ind.2 <- 251:500
+  
+  # Part 3-4
+  Y <- as.vector(DML.sample[,8])
+  D <- as.vector(DML.sample[,9])
+  X <- poly(as.matrix(DML.sample[,1:7]), degree=3, simple=T)
+  
+  y.lasso.cv   <- cv.glmnet(x = X[ind.2,], y = Y[ind.2], alpha=1, intercept = T)
+  y.lasso.pred <- predict(y.lasso.cv, newx = X[ind.1,], s="lambda.min")
+
+  d.lasso.cv   <- cv.glmnet(x = X[ind.2,], y = D[ind.2], alpha=1, intercept = T)
+  d.lasso.pred <- predict(d.lasso.cv, newx = X[ind.1,], s="lambda.min")
+  
+  # Part 5
+  U.hat <- as.vector(Y[ind.1] - y.lasso.pred)
+  V.hat <- as.vector(D[ind.1] - d.lasso.pred)
+  
+  # Part 6
+  thetahat <- as.numeric((V.hat %*% V.hat)^-1 %*% V.hat %*% U.hat)
+  thetahat.var <- (V.hat%*%V.hat)^-2 * (U.hat^2 %*% V.hat^2)
+  
+  # Part 7
+  test.rej   <- (abs((thetahat-0.5)/sqrt(thetahat.var)) > qnorm(0.975))
+  
+  # Part 8
+  matrix(c(thetahat, test.rej), nrow=1,ncol=2)
+  }
+  stopImplicitCluster()
+  return(DML.results)
+}
+
+```
+
+### Task 1.e
+
+Run the function `MC.DML.1d()` and save its output as matrix `DML.results.1e`. Then, do the following:
+
+1.  Calculate the mean of the column in `DML.results.1e` containing the logical variable for rejection of the null hypothesis and save it as `size.DML.1e`.
+
+2.  Calculate the mean of the column in `DML.results.1e` containing estimated treatment effect, subtract the true parameter value $0.5$ and save the result as `bias.DML.1e`.
+
+3.  Answer the following questions in the PDF file:
+
+    -   Is your DML estimator of the treatment effect $\theta_0$ unbiased?
+    -   Does a test with the null hypothesis $\mathbb{H}_0:\theta_0 = 0.5$ have rejection rates close to the nominal significance level?
+
+```{r}
+DML.results.1e <- MC.DML.1d()
+size.DML.1e    <- colMeans(DML.results.1e)[2]
+bias.DML.1e    <- colMeans(DML.results.1e)[1] - 0.5
+
+size.DML.1e
+bias.DML.1e
+```
+
+# Text Analysis
+
+## Premable
+
+We are now going to setup a book data in order to be able to use it in a topic model (LDA). The book we are going to use is [Pride and Prejudice](https://en.wikipedia.org/wiki/Pride_and_Prejudice).
+
+## Part 1
+
+Before setting up the topic model we need to clean the data. We start by downloading a package that contains Pride and Prejudice:
+
+```{r }
+library(dplyr)
+library(remotes)
+remotes::install_github("MansMeg/IntroML", subdir="rpackage")
+library(uuml)
+data("pride_and_prejudice")
+```
+
+The variable `pride_and_prejudice` contains all the words in the book.
+
+### Task 1.a Remove stopwords
+
+To start with we are going to remove the [stop words](https://en.wikipedia.org/wiki/Stop_word). Use `anti_join` to remove the stop words. For instruction see how to use `anti_join` see [tidy textmining](https://www.tidytextmining.com/index.html).
+
+```{r }
+data("stopwords")
+stop.words <- stopwords[stopwords$lexicon=="snowball",]
+pap.clean <- pride_and_prejudice %>% anti_join(stop.words, by = 'word')
+```
+
+### Task 1.b Removing unusual words
+
+Since the goal is to study common topics we don't care about very unusual words as they can not help us identify a common topics. Use `anti_join` to remove all words with a frequency less then 5 from `pap.clean`. You can create the word frequency using `table` (and the words can be found using `names` for the table). Hint for `anti_join` you need a data.frame with a correct column name. How many unique words have been removed?
+
+```{r }
+word_freq <- table(pap.clean$word)
+unusual_words <- tibble(word = names(word_freq), count = word_freq) %>% 
+    filter(count < 5)
+pap.clean <- pap.clean %>% anti_join(unusual_words, by = 'word')
+task1b.n_unique_words_removed <- "4,396 unique words removed. 7,416 total words removed"
+```
+
+### Task 1.c
+
+We will now create a corpus and let interpret each paragraph as a document (that we will later fit an LDA on). We do this using the `tm` package. Read [tidy textmining Chap 5](https://www.tidytextmining.com/dtm.html) and explain what the entries of the matrix `m.pap` implies in the PDF file. One can use `inspect(m.pap[1:10,1:20])` to view the matrix.
+
+```{r }
+crp <- aggregate(pap.clean$word, by = list(pap.clean$paragraph), FUN = paste0, collapse = " ")
+names(crp) <- c("paragraph", "text")
+library(tm)
+Vcrp <- VectorSource(crp$text)
+s <- SimpleCorpus(VectorSource(crp$text))
+m.pap <- DocumentTermMatrix(s)
+# m.pap is a sparse matrix called a Document-Term Matrix. Each element of the matrix represents the number of appearances a unique word (represented by the column) makes in the document (represented by the row).
+```
+
+## Part 2
+
+Before implementing the LDA model on the Pride and Prejudice data set, we will build a Gibbs sampler for LDA on a toydata set.
+
+Here is the data from the lecture:
+
+```{r}
+toy.data <- data.frame(word = c(c("boat","shore","bank"),
+                            c("Zlatan","boat","shore","money","bank"),
+                            c("money","bank","soccer","money")),
+                   sentence = c(rep(1,3),
+                                rep(2,5),
+                                rep(3,4)))
+unique.word <- unique(toy.data$word)
+W <- length(unique.word) #number of unique words
+D <- length(unique(toy.data$sentence)) #number of documents
+n <- length(toy.data$word) #total number words
+```
+
+Here are the fixed hyperparameters:
+
+```{r}
+alpha <- beta <- 0.5
+K <- 3 #number of topics
+```
+
+### Task 2.a
+
+To the vector toy.data add an extra column which gives the words position in the unique.vector. So for example `toy.data$index.word[5]=1` since word five is boat and it is first of the of the unique vectors
+
+```{r}
+toy.data$index.word <- match(toy.data$word, unique.word)
+```
+
+### Task 2.b
+
+Now make an initial random guess of the topics for each word. Using this initial guess z create two matrices `n_v`, word count per topic, and `n_d`, number of topics per document (sentence).
+
+```{r }
+z <- sample(1:K,n, replace = T)
+
+n_v <- matrix(0, nrow=K, ncol=W) #row = topics,      col = unique words
+n_d <- matrix(0, nrow=D, ncol=K) #row = documents,   col = topics
+
+for(i in 1:n){
+    n_v[z[i], toy.data[i,3]] <- n_v[z[i], toy.data[i,3]] + 1
+    n_d[toy.data[i,2], z[i]]   <- n_d[toy.data[i,2], z[i]] + 1
+}
+
+n_v
+n_d
+```
+
+### Task 2.c
+
+Now create a loop over each word and update the topic of the word (`z`), using the formula in the lecture. In the loop \* First remove the current `z[i]` from `n_v` and `n_d` \* Second create a vector `Pz` of length K where `Pz[k]` is proportional to the posterior probability `z[i]=k` which is given in the lecture. \* Third use `sample` to generate a new sample of `z[i]` where the probabilities of each topic is given by `Pz`. \* After sampling add the current `z[i]` from `n_v` and `n_d`.
+
+(Notice that some of the sums in the formulas are constant thus disappears in the normalizing constant).
+
+```{r }
+Pz <- rep(0,K)
+for(i in 1:n){
+    n_v[z[i], toy.data[i,3]] <- n_v[z[i], toy.data[i,3]] - 1
+    n_d[toy.data[i,2], z[i]]   <- n_d[toy.data[i,2], z[i]] - 1
+    
+    Pz <- (n_d[toy.data[i,2],] + alpha) * 
+        sum(n_d[toy.data[i,2],] + alpha)^-1 *
+        (n_v[, toy.data[i,3]] + beta) * 
+        sum(n_v[, toy.data[i,3]] + beta)^-1
+    
+    z[i] <- sample(1:3, 1, prob = Pz)
+    
+    n_v[z[i], toy.data[i,3]] <- n_v[z[i], toy.data[i,3]] + 1
+    n_d[toy.data[i,2], z[i]]   <- n_d[toy.data[i,2], z[i]] + 1
+}
+
+n_v
+n_d
+```
+
+### Task 2.d
+
+Now put the previous loop into a Gibbs sampler to generate $\theta,\phi$ (see slides for how to implement them, use `rdirichlet` from the library `DirichletReg` to sample the from the Dirichlet distribution).
+
+```{r }
+library(DirichletReg)
+n.mcmc <- 1000
+
+phi.vec   <- array(rep(0, n.mcmc*W*K), dim=c(K, W, n.mcmc))
+theta.vec <- array(rep(0, n.mcmc*D*K), dim=c(D, K, n.mcmc))
+
+z <- sample(1:K,n, replace = T)
+Pz <- rep(0,K)
+
+n_v <- matrix(0, nrow=K, ncol=W) #row = topics, col = unique words
+n_d <- matrix(0, nrow=D, ncol=K) #row = documents, col = topics
+
+for(i in 1:n){
+    n_v[z[i], toy.data[i,3]] <- n_v[z[i], toy.data[i,3]] + 1
+    n_d[toy.data[i,2], z[i]]   <- n_d[toy.data[i,2], z[i]] + 1
+}
+
+for(sim in 1:n.mcmc){
+    for(i in 1:n){
+        n_v[z[i],toy.data[i,3]] <- n_v[z[i],toy.data[i,3]] - 1
+        n_d[toy.data[i,2],z[i]] <- n_d[toy.data[i,2],z[i]] - 1
+        
+        Pz <- (n_d[toy.data[i,2],] + alpha) * 
+            sum(n_d[toy.data[i,2],] + alpha)^-1 *
+            (n_v[, toy.data[i,3]] + beta) * 
+            sum(n_v[, toy.data[i,3]] + beta)^-1
+        
+        z[i] <- sample(1:3, 1, prob = Pz)
+        
+        n_v[z[i],toy.data[i,3]] <- n_v[z[i],toy.data[i,3]] + 1
+        n_d[toy.data[i,2],z[i]] <- n_d[toy.data[i,2],z[i]] + 1
+    }
+    phi.vec[,,sim]   <- rdirichlet(K,rowSums(n_v)+beta)
+    theta.vec[,,sim] <- rdirichlet(D,rowSums(n_d)+alpha)
+}
+```
+
+## Part 3
+
+We are now going to use the package `topicmodels` package for Pride and Prejudice data, as this data set is to large for our naive implementation of the Gibbs sampler, however the algorithm remains the same, but now we just use the `LDA` function.
+
+```{r }
+
+library(topicmodels)
+K <- 10
+# Note: delta is beta in Griffith and Steyvers (2004) notation.
+control <- list(keep = 1, delta = 0.1, alpha = 1, iter = 2000, seed=2)
+tm.model <- LDA(m.pap, k = K, method = "Gibbs", control)
+```
+
+### Task 3.a
+
+It is hard to check burnin for many parameters, so what one typically does instead is to look at the log likelihood of the posterior and examine when it converged. What would be a good burnin value? Report it in the PDF file.
+
+```{r }
+lik <- extract_log_liks(tm.model)# the posterior samples
+# A good burn-in value would be around 75-100
+plot(1:250, lik[1:250], type='l', ylab='log-likelihood',xlab='x')
+abline(h=-268141.5, v=c(50,75,100))
+```
+
+### Task 3.b
+
+Now we are going to explore the result of the parameters. Use the function `wordcloud` (from the library `wordcloud`) to visualize $\phi$. select one of the topics that you find interpretable and use a wordcloud with at most fifty words to display the topic.
+
+```{r}
+library(wordcloud)
+phi   <- extract_phi(tm.model)
+apply(X = phi, 1, FUN=wordcloud::wordcloud, words=colnames(phi),max.words=50)
+# wordcloud::wordcloud(colnames(phi), phi[7,], max.words = 50)
+```
+
+### Task 3.c
+
+Using $\theta$ we can explore how the topics evolve over time. Visualize, how the frequency of topics evolves over time. (The results ($\theta$) are rather noisy, so one can for instance use a rolling window `frollmean` from the `data.table`.)
+
+```{r}
+library(data.table)
+theta <- extract_theta(tm.model)
+theta.mean <- apply(theta, 2, frollmean, n=70, algo='fast')
+
+apply(theta.mean, 2, FUN=plot, x=1:2051, type='l', xlab='x',
+      ylab='theta',ylim=c(0,0.25))
+# plot(1:2051, theta.mean[,4], type='l', 
+#      ylab = 'theta', xlab='x', ylim = c(0,0.25))
+```

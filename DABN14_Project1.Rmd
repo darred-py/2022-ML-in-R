@@ -1,0 +1,454 @@
+---
+title: "Project 1"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+For Regression trees, random forests and bagging, you will use the
+housing data set of California:
+
+```{r }
+CAhousing <- read.csv("Calhousing.csv")
+```
+
+Here we will try to predict the median home values (`logMedVal')`for
+areas in California where we have the following covariates for the
+houses:
+
+-   longitude
+-   latitude
+-   housingMedianAge
+-   population
+-   households
+-   medianIncome
+-   AveBedrms
+-   AveRoomsxwxw
+-   AveOccupancy - people per house hold
+
+You can get feel for the spatial structure of the data by looking at:
+
+```{r}
+library(maps)
+## preds
+map('state', 'california') 
+points(CAhousing[,1:2], col=CAhousing$logMedVal, pch=20, cex=.5)
+```
+
+Since we will compare different models we split the data into training
+and testing set:
+
+```{r}
+set.seed(12)
+n <- dim(CAhousing)[1] #Total number of rows
+index <- sample(n,n,replace=T) #Bootstrapping
+index.train <- index[1:ceiling(0.75*n)] #Indexing 75% of data set as training data
+index.test  <- setdiff(1:n, index.train) #Indexing the opposite of training index
+CAhousing.train <- CAhousing[index.train,] #Setting training data via training index
+CAhousing.test  <- CAhousing[index.test,] #Setting testing data via testing index
+```
+
+# Part 1: Regression tree
+
+We start by building our tree model using the library `rpart` to
+estimate a regression tree.
+
+## Task 1.a
+
+Start by fitting a regression tree using `rpart` where we want predict
+`logMedVal` using all the covariates. Don't forget to set the correct
+`method` option.
+
+```{r }
+library(rpart)
+# Write your code here
+tree.0 <- rpart(formula = 'logMedVal ~ .',
+                data = CAhousing.train,
+                method = "anova")
+```
+
+## Task 1.b
+
+You can visualize your tree using the library `rpart.plot`. According to
+the tree model when does the location (longitude and latitude) become
+important?
+
+```{r }
+library(rpart.plot)
+# Write your code here
+rpart.plot(tree.0)
+task1b.location.important <- "Long/Lat becomes important as soon as the 3rd depth (or by 3rd internal node as well), and increasingly so afterwards"
+```
+
+## Task 1.c
+
+`rparyt` is using the hyperparameter `cp` for regularization. Where the
+regularization function is $$
+L(y,T(x;\theta)) + cp |T| L(y,T_1(x;\theta)) 
+$$ where $T_1(x;\theta) = \bar{y}$. One can plot the effect of `cp` on
+the relative error with `plotcp`. In the figure the dashed line
+represent what one standard deviation off the smallest relative error
+is. You should now select `cp` by the $1-$s.e rule. The default option
+for stopping calculating `cp`values in `rpart` is $0.001$, this can be
+seen in the help of `help(rpart.control)`. We need to lower it a bit (we
+use `control` to set it to $0.0005$). Use the one $1-$s.e. rule to set
+`task1c.cp`.
+
+-   Explain how the $1-$s.e. rule work and then use it to calculate
+    `task1c.cp.1se`.
+-   `rpart` does not calculate the value (`task1c.cp.1se`) for you so
+    you need to compute it yourself. You can find the cross-validation
+    error and standard deviation in `tree.1$cptable`. Here `xerror` is
+    the cross-validation error and `xstd` is the corresponding standard
+    deviation.
+
+```{r}
+# Write your code here
+control=c(cp=0.0005)
+tree.1 <- rpart(formula = 'logMedVal ~ .' ,
+                data = CAhousing.train, 
+                method = 'anova', control = control)
+plotcp(tree.1)
+
+relative.error.se <- sd(tree.1$cptable[,3]) / sqrt(dim(tree.1$cptable)[1]) + min(tree.1$cptable[,3]) #calculate location of SE of relative error
+cp.se <- which.min(abs(tree.1$cptable[,3] - relative.error.se)) #Find CP associated with relative error closes to relative.error.se
+
+task1c.cp.1se <- tree.1$cptable[cp.se,1]
+tree.2 <- prune(tree.1, cp = task1c.cp.1se )
+task1c.explain1se <- "1-SE rule works to give the simplest model (in terms of complexity) while being relatively close to the minimal error"
+```
+
+## Task 1.d
+
+Evaluate the average L2 test loss (that is the mse on the test data)
+using `predict` for the prunned tree.
+
+```{r}
+# Write your code here
+y.test.hat <- predict(tree.2, CAhousing.test)
+y.test     <- CAhousing.test$logMedVal
+task1d.L2.loss <- mean((y.test - y.test.hat)^2)
+```
+
+# Part 2 Bagging
+
+## Task 2.a
+
+Now we are going to build a bagging model. To see if it outperforms the
+tree. Here you are supposed to:
+
+-   Sample a bootstrap sample from the training data.
+-   train a tree on the bootstrap sample. You will want to the grow as
+    deep as possible so set `cp=0` in `rpart`.
+-   For each of the bootstrap trees you are supposed to generate a
+    prediction on the test data.
+-   Then use the average predictor (`y.test.boot.hat`) to compute the
+    average l2 loss of the test data.
+
+Hint use the lecture slide on how to build the Bagging. Since the data
+is rather big it can be a good idea to first try your code on a smaller
+subset of data and use a smaller `n.boot` until it runs.
+
+```{r}
+set.seed(1)
+# Write your code here
+n <- dim(CAhousing.train)[1]
+n.boot <- 200
+control.bagging = c(cp=0)
+y.test.boot.hat <- rep(0, length(y.test))
+for(i in 1:n.boot){
+    index.boot <- sample(1:n, n, replace = TRUE)
+    # not.selected <- setdiff(1:n, unique(index.boot))
+    tree.boot <- rpart(formula = 'logMedVal ~ .',
+                       data = CAhousing.train[index.boot,],
+                       method = 'anova', control = control.bagging)
+    y.test.boot.hat <- y.test.boot.hat + predict(tree.boot, CAhousing.test)/n.boot
+}
+task2a.L2.loss <- mean( (y.test - y.test.boot.hat)^2 )
+task2a.L2.loss
+```
+
+## Task 2.b
+
+Now will compare the OOB on the training data with error on the test
+data.
+
+-   The fist two step in Task a).
+-   Now compute the OOB predictor on the training data.
+-   Compute the average L2 loss on the training data.
+
+```{r}
+set.seed(1)
+# Write your code here
+y.train <- CAhousing.train$logMedVal
+n <- dim(CAhousing.train)[1]
+n.boot <- 200
+control.bagging =c(cp=0)
+y.OOB.hat <- rep(0, n) #Array to store sum of predictions
+y.index.count.hat <- rep(0, n) #Array to store total count of index selection that were predicted on
+
+for(i in 1:n.boot){
+    index.boot <- sample(1:n, n, replace = TRUE)
+    not.selected <- setdiff(1:n, unique(index.boot))
+    tree.boot <- rpart(formula = 'logMedVal ~ .',
+                       data = CAhousing.train[index.boot,],
+                       method = 'anova', control = control.bagging) #Modelling tree on selected index
+    y.OOB.hat[not.selected] <- y.OOB.hat[not.selected] + predict(tree.boot, CAhousing.train[not.selected,]) #Storing sum of predictions for not.selected indices
+    y.index.count.hat <- y.index.count.hat + (1:n %in% not.selected) #Storing the not.selected index so that we may average the predictions later
+}
+y.non.zero <- which(y.index.count.hat > 0) #A check so that no zero elements are passed through to the division in the next line. More important when testing with a low bootstrap count.
+task2b.L2.loss.OOB <- mean((y.train[y.non.zero] - y.OOB.hat[y.non.zero] / y.index.count.hat[y.non.zero])^2)
+task2b.L2.loss.OOB
+```
+
+# Part 3 Forest
+
+Now will build a random forest using `randomForest` library.
+
+## Task 3.a
+
+Fit forest with `mtry` option set to the number suggested by the
+reference (see `help(randomForest)` for what the argument `mtry` means).
+Use the forest model to compute the average L2 test loss (use
+`predict`).
+
+```{r}
+library(randomForest)
+# Write your code here
+m.book <- (dim(CAhousing.train)[2] - 1)/3 #Rule of thumb for Regression Trees
+forest.model <- randomForest(logMedVal ~ .,
+                             data = CAhousing.train,
+                             mtry = m.book,
+                             ntree=200, 
+                             importance=T)
+forest.model.pred <- predict(forest.model, CAhousing.test)
+task3a.L2loss <- mean((y.test - forest.model.pred)^2)
+```
+
+## Task 3.b
+
+Now we are going see if we can improve prediction by using a different
+`mtry`. We tune the parameter using `tuneRF`. Use the `help(tuneRF)` to
+fill in the blanks. Set the new `mtry` value in `m.new` and see if the
+new models improves the average L2 loss on the test data.
+
+```{r}
+# Write your code here
+X <- subset(CAhousing.train, select = -logMedVal)
+hyperparameter <- tuneRF(X, CAhousing.train$logMedVal,
+                         ntreeTry =100,
+                         improve=0.01)
+m.new  = hyperparameter[which.min(hyperparameter[,2]),1]
+forest.model2 <- randomForest(logMedVal ~ ., 
+                              data = CAhousing.train,
+                              mtry = m.new  ,
+                              ntree=200, 
+                              importance=T)
+forest.model2.pred <- predict(forest.model2, CAhousing.test)
+task3b.L2loss <- mean((y.test - forest.model2.pred)^2)
+task3b.improvment <- "Error decreased by about 0.01, or in a -0.1% change. This improvement can be seen as minimal."
+```
+
+## Task 3.c
+
+We can use the average increase in MSE by permuting a variable in a
+random forest as a measure of variable importance. That if how much
+would the OOB mse increase if we replaced the correct variable value
+with a random permutation from the data. This can be viewed for all
+covariates using the function `varImpPlot`. Which was the variable most
+important according to the permutation mse measure?
+
+```{r}
+# Write your code here
+varImpPlot(forest.model2, sort = F)
+task3c.important <- "According to the overall %increase to MSE, AveOccupancy was the most important variable. If we are to take IncNodePurity, then I say medianIncome variable is the most important." 
+```
+
+# Part 4 XGBoost
+
+In this part, you are going to analyze the dataset of electronic music,
+which contains 3000 observations of 11 features (generated by Spotify)
+for each of 7 different types of electronic music. The features are
+namely:
+
+1.  Danceability --- How danceable a song is ranging from 0 to 1.
+2.  Perceptual measure of intensity and activity. High energy tracks
+    feel fast, loud, and noisy and will be close to 1.
+3.  Key --- The estimated overall key of the track.
+4.  Loudness ---The overall loudness of a track in decibels (dB).
+5.  Mode --- Indicates the modality (major or minor) of a track, major
+    is represented by 1 and minor is 0.
+6.  Speechiness --- Probability of a song containing only speech. Spoken
+    word tracks and vocal intros will have values close to 1.
+7.  Acousticness --- Probability of a song being purely acoustic vs
+    synthesized. Acoustic recordings of songs will have values close to
+    1.  
+8.  Instrumentalness --- Probability of a song containing no vocals.
+    Purely instrumental songs will have values closer to 1.
+9.  Liveness --- Detects the presence of an audience in the recording,
+    ranging from 0 to 1.
+10. Valence --- Mood of a song. Happier sounding songs have a value
+    closer to 1, sadder songs closer to 0.
+11. Duration --- The duration of the track in milliseconds (ms).
+
+Using XGBoost, you are going to perform classification tasks and
+determine the importance of each features in the model.
+
+```{r}
+library(xgboost)
+library(SHAPforxgboost)
+library(caret)
+set.seed(7)
+
+df = read.csv("edm_project1.csv")
+features <- colnames(df[,-12])
+```
+
+## Task 4.a
+
+Use the subset of psytrance and techno music, apportion the dataset into
+training and test sets, with an 80-20 split. You may use function
+`createDataPartition` in package `caret` to split the dataset.
+
+```{r}
+# Write your code here.
+genre.4a <- c('psytrance', 'techno')
+index.4a <- which(df$genre %in% genre.4a)
+df.4a <- df[index.4a,]
+n.4a <- nrow(df.4a)
+
+matrix.4a <- as.matrix(df.4a[,-12])
+y.4a <- (df.4a[,12] == 'techno')*1
+
+index.train.4a <- createDataPartition(1:n.4a, times = 1, p = 0.8, list =F)
+index.test.4a <- setdiff(1:n.4a, index.train.4a)
+
+matrix.train.4a <- matrix.4a[index.train.4a,]
+y.train.4a <- y.4a[index.train.4a]
+matrix.test.4a <- matrix.4a[index.test.4a,]
+y.test.4a <- y.4a[index.test.4a]
+```
+
+Fit an XGBoost model to perform a binary classification using the given
+11 features. Set the max depth of a tree to be 4, learning rate to be 1
+and the number of rounds to be 10. Use the binary logistic objective
+function.
+
+```{r}
+# Write your code here.
+biCat = xgboost(data = matrix.train.4a, 
+                label = y.train.4a,
+                max.depth = 4, #tree depth
+                eta = 1, #learning rate
+                nthread = 2, 
+                nrounds = 10, #Number of boosting iterations
+                objective = 'binary:logistic')
+```
+
+Report the test error and contribution of each feature to the model
+("Gain"). Also, find and plot the shapley ratio of these features (hint:
+use `shap.prep` and `shap.plot.summary`). How does the order of the
+top-3 important features differ based on "Gain" and the shapley ratio?
+
+```{r}
+# Write your code here.
+# Test Error
+y.pred.4a <- as.numeric(predict(biCat, matrix.test.4a) > 0.5) #using threshold of 0.5
+y.err.4a <- mean(y.test.4a != y.pred.4a) #misclassification rate
+y.err.4a
+
+# Gain
+gain.4a <- xgb.importance(model=biCat)
+gain.4a[,1:2] #'loudness' is the most important variable here
+
+shap.prep.4a <- shap.prep(xgb_model = biCat, X_train = matrix.train.4a)
+shap.plot.summary(shap.prep.4a)
+
+important.features.4a <- 'The top 3 most important features are the same between the Gain and Shapley values'
+```
+
+## Task 4.b
+
+Use the subset of psytrance, techno, techhouse, and trance music,
+apportion the dataset into training and test sets, with an 80-20 split.
+
+```{r}
+# Write your code here.
+genre.4b <- c('psytrance', 'techno', 'techhouse', 'trance') #setting genres
+index.4b <- which(df$genre %in% genre.4b) #getting index locations related to genres
+df.4b <- df[index.4b,] #subsetting df to get data related to genres
+n.4b <- nrow(df.4b) #number of observations in df
+
+matrix.4b <- as.matrix(df.4b[,-12]) #creating matrix for modelling - removes column 'genre'
+y.4b <- rep(0, n.4b) 
+for (i in 1:n.4b) { #returns value in [0,3] for each row element pertaining to genre type
+    y.4b[i] <- which((genre.4b %in% df.4b[i,12]) == TRUE) - 1 #which() returns index location of matched genre. -1 to set bounds to [0,3]
+}
+
+index.train.4b <- createDataPartition(1:n.4b, times = 1, p = 0.8, list = FALSE) #creating index partition for training
+index.test.4b <- setdiff(1:n.4b, index.train.4b) #creating index partition for testing
+
+matrix.train.4b <- matrix.4b[index.train.4b,]
+y.train.4b <- y.4b[index.train.4b]
+matrix.test.4b <- matrix.4b[index.test.4b,]
+y.test.4b <- y.4b[index.test.4b]
+```
+
+Fit an XGBoost model to perform a multi-class classification using the
+given 11 features. Set the max depth of a tree to be 4, learning rate to
+be 1 and the number of rounds to be 10. Use the softmax objective
+function.
+
+```{r}
+# Write your code here.
+# ...
+mulCat = xgboost(data = matrix.train.4b, 
+                 label = y.train.4b,
+                 max.depth = 4, eta = 1, 
+                 nthread = 2, nrounds = 10, 
+                 num_class = 4, objective = 'multi:softmax')
+```
+
+Report the "Gain" of each features. What is the most important variable
+here?
+
+```{r}
+# Write your code here.
+# Test Error
+y.pred.4b <- predict(mulCat, matrix.test.4b)
+y.err.4b <- mean(y.test.4b != y.pred.4b) #misclassification rate
+y.err.4b
+
+# Gain
+gain.4b <- xgb.importance(model=mulCat)
+gain.4b[,1:2]
+
+important.features.4b <- 'Danceability is the most important variable given by Gain by a large margin'
+```
+
+## Task 4.c
+
+There is some bug with `shap.prep` for multi-class classification, so
+you need generate the shapley ratio for each class manually. Report the
+shapley ratio for all four classes. According to the shapley ratio, what
+is the most important feature to determine whether or not a track is a
+psytrance?
+
+```{r}
+shap_contrib <- predict(mulCat, matrix.train.4b, predcontrib = TRUE)
+# Write your code here.
+names(shap_contrib) <- genre.4b
+shap.prep.4c <- list()
+for (i in genre.4b) {
+    shap.prep.4c[[i]] <- shap.prep(xgb_model = mulCat,
+                                   shap_contrib = as.data.frame(shap_contrib[[i]][,-12]),
+                                   X_train = matrix.train.4b)
+}
+shap.plot.summary(shap.prep.4c$psytrance)
+important.features.4c <- 'Duartion is the most important feature to whether or not a track is psytrance'
+```

@@ -1,0 +1,849 @@
+---
+title: "Project 2"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 1 Metropolis-Hastings Random Walk
+
+## Task 1.a
+
+Start by implementing a Metropolis-Hastings random walk in the function
+`MHRW`. The argument should be
+
+-   `f.log` a function that returns the logarithm of the target density.
+-   `x0` the initial guess where we start the algorithm from.
+-   `n.samples` length of the Markov chain.
+-   `sigma` the tuning parameter in the proposal distribution
+    ($X^* \sim \mathcal{N}\left(X^{(i-1)},\sigma^2 \right)$).
+
+The function should return `X` which the resulting Markov chain (of
+length `n.samples`).
+
+```{r }
+# Write your code here
+library(MASS)
+MHRW <- function(f.log, x0, n.samples, sigma, param = NA){
+    X <- rep(0, n.samples)
+    X[1] <- x0
+    flog_s <- f.log(X[1], param)
+    for (i in 2:n.samples){
+        theta <- rnorm(1, X[i-1], sigma) #New step candidate
+        flog_splus1 <- f.log(theta, param)
+        ratio <- flog_splus1 - flog_s #Acceptance ratio for step candidate
+        if(ratio >= 0){ #No need to sample U(0,1) if ratio >= 0
+            X[i] <- theta
+            flog_s <- flog_splus1
+        } else{
+            U <- log(runif(1, min=0, max=1)) #Splits decision areas of Accept-Reject with p(Accept)=ratio
+            if(ratio >= U){
+                X[i] <- theta
+                flog_s <- flog_splus1
+            } else{X[i] <- X[i-1]}
+        }
+    }
+    return(X)
+}
+
+```
+
+## Task 1.b
+
+Now use the algorithm to sample from the density: $$
+f(x) \propto \exp(-|x| - 0.5 x^2 - (x-1)^2)
+$$ Generate 1000 MCMC using $\sigma=0.001$, plot the acf (use the `acf`
+function in r). Also do it for $\sigma=1$ and $\sigma=10$. It is quite
+clear that the mixing is slow (strong dependence in the Markov chain)
+when sigma is too large $\sigma$ (the chain gets stuck a lot). However,
+explain why the mixing is slow when $\sigma$ is small?
+
+```{r }
+set.seed(7)
+# Write your code here
+x0 <- 0
+n.1b <- 1000
+sigma1.1b <- 0.001
+sigma2.1b <- 1
+sigma3.1b <- 10
+
+f.log.1b <- function(x, param){
+    val <- -abs(x) - 0.5*x^2 - (x - 1)^2
+    return(val)
+}
+
+acf(x=MHRW(f.log.1b, x0, n.1b, sigma1.1b), lag.max=n.1b) #Sigma = 0.001
+acf(x=MHRW(f.log.1b, x0, n.1b, sigma2.1b), lag.max=n.1b) #Sigma = 1
+acf(x=MHRW(f.log.1b, x0, n.1b, sigma3.1b), lag.max=n.1b) #Sigma = 10
+
+task1b.why.small.sigma <- "Small sigma means that we have a small variance which implies that each step distance between old theta and new theta will be short. This leads to a slower convergence"
+```
+
+## Task 1.c
+
+Now consider a random variable $X$ with density function $f(x)$ as
+defined in Task 1.b. What is (approximately) the probability that
+$P(X>1)$ ?
+
+```{r }
+# Write your code here
+task1c.prob <- 'We can integrate over f(x) from 1 to infinity and get a value of 0.0781'
+
+integrate(function(x){return(exp(-abs(x)-0.5*x^2-(x - 1)^2))},
+          lower=1, upper = 5)
+```
+
+# Part 2 Hierarchical Regression Models
+
+We are now going to build a Gibbs sampler for sampling the posterior
+distribution of the the hierarchical regression model from the lecture:
+$$
+\begin{align*}
+\mu &\sim \mathcal{N}\left(\mu_0, \Lambda_0 \right) \\
+\Sigma &\sim \mathcal{iW}\left(\eta_0, S_0 \right) \\
+\beta_j &\sim \mathcal{N}\left(\mu, \Sigma \right) \, j=1,\ldots,m \\
+\sigma^2 &\sim  \Gamma^{-1}\left(\frac{\nu_0}{2}, \frac{\nu_0\sigma^2_0}{2} \right) \\
+y_{j} &\sim \mathcal{N} \left(X_j\beta_j,\sigma^2I_{n_j \times n_j} \right) \, j=1,\ldots,m
+\end{align*}
+$$
+
+Before building the Gibbs sampler we need to set the hyperparameters
+(they are chosen as rather uninformative)
+
+```{r }
+# \mu parameters - Gaussian dist.
+mu0 <- c(0,0)
+Lambda0 <- matrix(c(10,0,0,10),nrow=2, ncol=2)
+iLambda0 <- solve(Lambda0) #usefull later
+# \Sigma parameters - inverse Wishart dist.
+S0 <- matrix(c(10^-5,0,0,10^-5),nrow=2, ncol=2)
+eta0<- 4 
+# \sigma^2 parameters - inverse Gamma(1, 2) dist
+nu0 <- 2
+s20 <- 2
+```
+
+We now look at the school data. We start by extracting the data and
+storing each $y$ vector in the list `Y` and each `X` matrix in the list
+`X`
+
+```{r }
+load("nelsSES.RData") 
+
+ids<-sort(unique(nels$sch_id)) #sorting school ID codes
+m<-length(ids) #Number of unique school ID codes
+Y<-list() ; X<-list() ; ns<-NULL #initializing variables
+for(j in 1:m) #iterating through each school code
+{
+  Y[[j]]<-nels[nels$sch_id==ids[j], 4] #Creating a list object containing math scores for the j-th school
+  ns[j]<- sum(nels$sch_id==ids[j]) #Tallying number of observations for j-th school
+  xj<-nels[nels$sch_id==ids[j], 3] #Socio-Economic Status observations of j-th school
+  xj<-(xj-mean(xj)) #Centering (de-meaning) SES values for j-th school
+  X[[j]]<-cbind( rep(1,ns[j]), xj) #Creating matrix inputs with y-intercept and SES values
+}
+
+
+```
+
+The final thing we do before build the Gibbs sampler is setting up a
+good initial guess of the parameters, this is done by fitting each
+school independently:
+
+```{r }
+S2.LS<-BETA.LS<-NULL
+for(j in 1:m) {
+  fit<-lm(Y[[j]]~-1+X[[j]] )
+  BETA.LS<-rbind(BETA.LS,c(fit$coef)) #Storing coefficients of model
+  S2.LS<-c(S2.LS, summary(fit)$sigma^2) #Storing squared residual standard errors of model
+} 
+
+
+mu <-apply(BETA.LS,2,mean) #averaging coefficients from all school models
+Sigma <- cov(BETA.LS)
+iSigma <- solve(Sigma) #Used below for sampling
+sigma2<- mean(S2.LS) #Used below for sampling
+
+```
+
+## Task 2.a Sample $\beta$
+
+The conditional distribution of $\beta_j$ is multivariate normal. Thus
+we need to be able to sample from it and we thus create the following
+function:
+
+```{r }
+## mvnormal simulation
+rmvnorm<-function(n,mu,Sigma) #similar to MASS::mvrnorm()
+{ 
+  E<-matrix(rnorm(n*length(mu)),n,length(mu))
+  return(t(  t(E%*%chol(Sigma)) +c(mu)))
+}
+```
+
+Now write a loop that generates conditional of the coefficients for each
+school ($\beta_j$). The posterior distribution depends on the parameters
+$\sigma^2$ (`sigma2`), $\mu$ (`mu`) and $\Sigma$ (`Sigma`). Store the
+sample of $\beta_j = (\beta_{0j},\beta_{1j})$ in `Betas[j,]`.
+
+```{r }
+# Write your code here.
+Betas <- matrix(0, nrow=100, ncol=2)
+for(j in 1:m){ 
+    #Here we use the posterior distribution formula under 9.10a-c on page 222 of Lindholm
+    var_j <- solve(iSigma + t(X[[j]]) %*% X[[j]] / sigma2)
+    mu_j <- var_j %*% (iSigma %*% mu + t(X[[j]]) %*% Y[[j]] / sigma2)
+    Betas[j,] <- rmvnorm(1, mu_j, var_j)
+}
+```
+
+## Task 2.b Sample $\mu$
+
+Given the new samples of `Betas` generate a sample of $\mu$ (again the
+distribution is in the lecture).
+
+```{r }
+# Write your code here.
+
+beta_2b <- colMeans(Betas)
+sigma_2b <- solve(m*iSigma + iLambda0)
+mu_2b <- sigma_2b %*% (m*iSigma %*% beta_2b + iLambda0 %*% mu0)
+mu <- t(rmvnorm(1,mu_2b, sigma_2b))
+```
+
+## Task 2.c Inverse Wishart
+
+The conditional distribution $\Sigma$ is a inverse Wishart, in the
+library `LaplacesDemon` there is a function `rinvwishart` use this to
+generate samples of $\Sigma$ given the new $\mu$ and $\beta$'s.
+
+```{r }
+library(LaplacesDemon)
+# Write your code here.
+mu.vec <- matrix(t(mu), nrow = m, ncol=2, byrow=T)
+beta.diff.2c <- t(Betas - mu.vec) %*% (Betas - mu.vec)
+
+Sigma <- rinvwishart(nu = eta0 + m,
+                     S = S0 + beta.diff.2c)
+iSigma <- solve(Sigma)
+```
+
+## Task 2.d $\sigma^2$
+
+The finial parameter is $\sigma^2$ this follows a $\Gamma^{-1}$
+distribution. The easiest way to sample a
+$X\sim \Gamma^{-1}(\alpha,\beta)$ is to sample
+$X^* \sim \Gamma(\alpha,\beta)$ and set $X= \frac{1}{X^*}$, then $X$ has
+follows $\Gamma^{-1}(\alpha,\beta)$ distribution.
+
+Now to sample the posterior of
+
+```{r}
+# Write your code here.
+e.2d <- 0
+obs <- dim(nels)[1]
+for(i in 1:m){
+    e.2d <- e.2d + norm(Y[[j]] - X[[j]] %*% Betas[j,], type = '2')^2
+}
+
+sigma2 <- 1/rgamma(1,
+                   nu0/2 + obs/2,
+                   nu0*s20/2 + e.2d/2)
+```
+
+## Task 2.e The Full Gibbs Sampler
+
+Now put everything in a joint loop and run $10^4$ iterations of the
+Gibbs sampler. Store the samples of $\beta$ in
+`beta0.samples, beta1.samples`, $\mu$ in `mu.samples`, and $\sigma^2$ in
+`sigma2.samples`
+
+```{r}
+n.sim <- 10^4 #^4
+beta0.samples <- beta1.samples <- matrix(0, nrow  =n.sim, ncol=m)
+mu.samples    <- matrix(0, nrow=n.sim, ncol= 2)
+sigma2.samples    <- rep(0, n.sim)
+Sigma11.samples  <- Sigma22.samples <- rep(0, n.sim)
+# Write your code here.
+
+# Hyperparameters
+obs <- dim(nels)[1]
+
+#Initial guess
+mu <-apply(BETA.LS,2,mean)
+Sigma <- cov(BETA.LS)
+iSigma <- solve(Sigma)
+sigma2<- mean(S2.LS)
+
+for(i in 1:n.sim){
+    #beta Sample
+    for(j in 1:m){ 
+        Betas_var <- solve(iSigma + t(X[[j]]) %*% X[[j]] / sigma2)
+        Betas_mu <- Betas_var %*% (iSigma %*% mu + t(X[[j]]) %*% Y[[j]] / sigma2)
+        Betas[j,] <- rmvnorm(1, Betas_mu, Betas_var)
+    }
+    beta0.samples[i,] <- t(Betas)[1,]
+    beta1.samples[i,] <- t(Betas)[2,]
+    
+    #mu Sample
+    mu_approx <- colMeans(Betas)
+    mu_var <- solve(m*iSigma + iLambda0)
+    mu_calc <- mu_var %*% (m*iSigma %*% mu_approx + iLambda0 %*% mu0)
+    mu <- t(rmvnorm(1,mu_calc, mu_var))
+    mu.samples[i,] <- mu
+    
+    #Sigma Sample
+    # Sigma_mu.vec <- matrix(t(mu), nrow = m, ncol=2, byrow=T)
+    Sigma_BetasVar <- matrix(0,nrow=2,ncol=2)
+    for(j in 1:m){
+        Sigma_BetasVar <- Sigma_BetasVar + (Betas[j,] - mu) %*% t(Betas[j,] - mu)
+    }
+    Sigma <- rinvwishart(nu = eta0 + m, S = S0 + Sigma_BetasVar)
+    iSigma <- solve(Sigma)
+    Sigma11.samples[i] <- Sigma[1,1]
+    Sigma22.samples[i] <- Sigma[2,2]
+    
+    #sigma2 Sample
+    e.j <- 0
+    for(j in 1:m){
+        e.j <- e.j + norm(Y[[j]] - X[[j]] %*% Betas[j,],type='2')^2
+    }
+    sigma2 <- 1/rgamma(1,
+                       nu0/2 + obs/2,
+                       nu0*s20/2 + e.j/2)
+    sigma2.samples[i] <- sigma2
+}
+
+```
+
+## Task 2.f The Posterior Mean
+
+We can now examine the posterior distribution using our MCMC samples.
+What is the posterior mean and variance of $\mu_1$? What is the
+probability that school $j=10$ has a larger effect of $SES$ compared to
+school $j=9$?
+
+```{r }
+# Write your code here.
+task2f.mu1.mean <- list(mean = mu_var[2], variance = mu_var[2,2])
+task2f.mu1.mean
+
+var9.2f <- solve(iSigma + t(X[[9]]) %*% X[[9]] / sigma2)
+mu9.2f <- var9.2f %*% (iSigma %*% mu + t(X[[9]]) %*% Y[[9]] / sigma2)
+
+var10.2f <- solve(iSigma + t(X[[10]]) %*% X[[10]] / sigma2)
+mu10.2f <- var10.2f %*% (iSigma %*% mu + t(X[[10]]) %*% Y[[10]] / sigma2)
+
+task2f.school.prob <- pnorm(Betas[10,2] - Betas[9,2], mu10.2f[2] - mu9.2f[2], sqrt(var10.2f[2,2] + var9.2f[2,2]))
+paste0(round(task2f.school.prob*100,3), "%")
+```
+
+## Task 2.g The Posterior Distribution
+
+Below you plot the posterior mean of the regression curve for all the
+schools. Interpret the results, is there large variability in how SES
+effect is cross school?
+
+```{r }
+plot( range(nels[,3]),range(nels[,4]),type="n",xlab="SES",
+      ylab="math score")
+for(j in 1:m) {    abline(colMeans(beta0.samples)[j],colMeans(beta1.samples)[j],col="gray")  }
+abline( mean(mu.samples[,1]),mean(mu.samples[,2]),lwd=2 )
+task2g.SES_effect <- "There is a positive correlation between math scores and SES. We can also note that as SES increases, variability in math scores increases."
+```
+
+## Task 2.h The Posterior Distribution II
+
+The random variable that represents a new student in a new school with
+$SES=0$ is given $$
+y^* = \beta_0^* + \epsilon^* .
+$$ Here $\beta^*\sim \mathcal{N}\left(\mu,\Sigma_{11} \right)$ and
+$\epsilon^* \sim \mathcal{N}\left( 0, \sigma^2\right)$. The total
+variability of student score is $\Sigma_{11}+\sigma^2$ and $\Sigma_{11}$
+represent how much variance is explained by school effect and $\sigma^2$
+represent individual student effect. What posterior mean of the ratio of
+the total math score variability explained by the school effect?
+
+```{r }
+task2h.ratio_school <- paste0("The ratio is ", round(Sigma11.samples[n.sim] / (Sigma11.samples[n.sim]+sigma2.samples[n.sim]),4))
+task2h.ratio_school
+```
+
+# Part 3 More Advanced Models
+
+We have previous assumed that all schools have the same joint
+variability of the students ($\sigma^2$). We will now put a Hierarchical
+prior on $\sigma^2$ and let each school have its own $\sigma^2_j$: 
+$$ \sigma_j  \sim \Gamma^{-1}\left(\frac{\nu}{2}, \frac{\nu s}{2} \right) $$ 
+Then we put improper prior on $s$ and a exponential prior on $\nu$:
+$$ f_{\theta}(s) \propto 1,\, f_{\theta}(\nu) \propto \exp(-0.001\nu) $$
+
+We will now incorporate this into our Gibbs sampler in part 2. But first
+we need to build each component. As an initial guess we set
+
+```{r}
+nu =  40
+s  = 70
+```
+
+## Task 3.a Sampling $\sigma^2_j$
+
+Generate a sample samples of $\sigma^2_j$ from the conditional
+distribution which is
+
+$$\sigma ^2_j \sim \Gamma^{-1}\left(\frac{\nu+ n_j}{2}, \frac{ \nu s + RSS_j}{2} \right)$$
+
+here $$RSS = \sum_{i=1}^{n_j} \left(y_{ij} - \beta_{0j} - x_{ij}
+\beta_{1j} \right)^2$$
+
+```{r}
+# Write your code here.
+RSS <- rep(0,m)
+sigma2s <- rep(0,m)
+ for(j in 1:m) {
+     RSS[j] <- norm(Y[[j]] - X[[j]] %*% Betas[j,],type='2')^2
+     sigma2s[j] <- 1/rgamma(1, nu/2 + length(Y[[j]])/2, nu*s/2 + RSS[j]/2)
+ }
+```
+
+## Task 3.b Sampling $s$
+
+Now we have $m$ observations on $\sigma^2$ then one can show that the
+conditional distribution of $s$ is $$
+s| \sigma^2_{1:m}, \nu \sim \Gamma \left(m\frac{\nu}{2} + 1, \frac{\nu}{2}\sum_{j=1}^m \frac{1}{\sigma^2_j} \right)
+$$ Sample a $s$
+
+```{r}
+# Write your code here.
+s <- rgamma(1, m * nu * 0.5 + 1, nu * 0.5 * sum(sigma2s^-1))
+```
+
+## Task 3.c Sampling $\nu$
+
+There exists no explicit distribution for $\nu | (\theta\setminus\nu)$,
+however we can within our Gibbs sampler replace a step with a Metropolis
+Hastings random walk. We will now derive the Metropolis Hastings rw. The
+conditional density of $\nu$ is given by: $$
+f_{\theta|y}(\nu| \sigma^2_{1:m}, s) \propto \prod_{j=1}^m \frac{(\frac{\nu s}{2})^{\nu/2}}{\Gamma(\nu/2)} \left(\sigma_j^2\right)^{-\frac{\nu}{2}}
+ \exp(-\sum_{j=1}^m\frac{s}{2\sigma^2_j} \nu - 0.001\nu) \propto  \frac{(\frac{\nu s}{2})^{m\nu/2}}{\Gamma(\nu/2)^{m}} \exp\left(  - \sum_{j=1}^m\log(\sigma_j^2) \frac{\nu}{2} - \sum_{j=1}^m \frac{s}{2\sigma^2_j} \nu  - 0.001\nu\right) 
+$$ So we need to use the our MH random walk to generate samples (for
+given fixed `sigma2s` and `s`).
+
+-   First `f.log` from the formula above. Hint: when computing the
+    logarithm of the density don't use `log(gamma(x/2))` but use
+    `lgamma(x/2)` this is much more numerically stable.
+-   Second tune $\sigma^2$ (for MHRW) so that we get an `acf(5)` is less
+    than $0.6$.
+
+```{r}
+# Write your code here.
+f.log <- function(nu, param){ #list(m, s, sigma2s)
+    if(nu <= 0){ #nu can't be negative return -Inf then
+        return(-Inf)
+    } else {
+        m <- param[[1]]
+        s <- param[[2]]
+        sigma2s <- param[[3]]
+        calc <- m*(nu*0.5*log(nu*s*0.5) - lgamma(nu*0.5)) - sum(log(sigma2s)*nu*0.5) - sum(s*0.5*nu*sigma2s^-1) - nu*10^-3
+        return(calc)
+    }
+}
+
+acf.func.3c <- function(func, nu, iter, start.sigma, end.sigma, n, param){
+    #func   = log density function
+    #iter   = number of sigmas to calculate acf(5)
+    #start.sigma, end.sigma = start and end of sigma iteration sequence
+    #n    = number of MHRWalks of 100 steps to average
+    acf.seq  <- seq(start.sigma, end.sigma, length.out = iter)
+    acf.vec  <- rep(0, n)
+    acf.vals <- matrix(0, nrow=iter,ncol=2)
+    for(i in 1:iter){
+        for(j in 1:n){
+            acf.calc <- acf(MHRW(func, nu, 100, acf.seq[i], param), plot=F)
+            acf.vec[j] <- abs(acf.calc$acf[5])
+        }
+        acf.vals[i,] <- c(mean(acf.vec), var(acf.vec))
+    }
+    # plot(acf.vals, xlab = 'mean', ylab = 'variance')
+    acf.vals[,1] <- (acf.vals[,1] - range(acf.vals[,1])[1]) / diff(range(acf.vals[,1]))
+    acf.vals[,2] <- (acf.vals[,2] - range(acf.vals[,2])[1]) / diff(range(acf.vals[,2]))
+    index <- which.min(sqrt(rowSums(acf.vals)))
+    return(acf.seq[index])
+}
+
+optim.sigma <- acf.func.3c(func = f.log, nu = nu, iter = 100, 
+                           start.sigma = 0.1, end.sigma = 10, 
+                           n = 100, param = list(m,s, sigma2s))
+
+acf(MHRW(f.log, nu, 100, optim.sigma, list(m,s, sigma2s)), plot=T)
+```
+
+## Task 3.d Sampling $\beta_j$
+
+Now we also need to rewrite our sampling of $\beta_j$. Derive a sample
+given $\mu,\Sigma,\Sigma_j$ Now putting everything together in Gibbs
+sampler (here you also need to update the sampling of $\beta$ as
+$\sigma^2$ now will depend on the school).
+
+```{r}
+# Write your code here.
+Betas <- matrix(0, nrow=100, ncol=2)
+for(j in 1:m){
+    var_j <- solve(iSigma + t(X[[j]]) %*% X[[j]] / sigma2s[j])
+    mu_j <- var_j %*% (iSigma %*% mu + t(X[[j]]) %*% Y[[j]] / sigma2s[j])
+    Betas[j,] <- rmvnorm(1, mu_j, var_j)
+}
+```
+
+## Task 3.e Sampling Everything
+
+Now we can put everything into a big single Gibbs sampler.
+
+-   Run the full Gibbs sampler for $10^4$ iterations.
+-   For the MHRW of $\nu$ use the previous value of $\nu$ in the Gibbs
+    sampler as initial value. Run ten iteration and let the new $\nu$ be
+    the final value of MHRW. Use the hyperparameter from task 3.c
+-   Store the samples of $\beta$ in
+    `beta0.samples,.v2 beta1.samples.v2`, $\mu$ in `mu.samples.v2`.
+
+```{r}
+# Write your code here.
+n.sim <- 10^4
+beta0.samples.v2 <- beta1.samples.v2 <- sigma2s.v2 <- matrix(0, nrow  =n.sim, ncol=m)
+mu.samples.v2    <- matrix(0, nrow=n.sim, ncol= 2) 
+Sigma11.samples.v2 <- Sigma22.samples.v2 <- rep(0, n.sim)
+
+for(i in 1:n.sim){
+    #sigma2 Sample
+    RSS <- rep(0,m)
+    for(j in 1:m) {
+        RSS[j] <- norm(Y[[j]] - X[[j]] %*% Betas[j,],type='2')^2
+        sigma2s[j] <- 1/rgamma(1, nu/2 + length(Y[[j]])/2, nu*s/2 + RSS[j]/2)
+    }
+    sigma2s.v2[i,] <- sigma2s
+    
+    #s Sample
+    s <- rgamma(1, m * nu * 0.5 + 1, nu * 0.5 * sum(sigma2s^-1))
+    
+    #nu Sample
+    rw <- MHRW(f.log, nu, 10, optim.sigma, c(m,s,sigma2s))
+    nu <- rw[10]
+    
+    #beta Sample
+    for(j in 1:m){ 
+        Betas_var <- solve(iSigma + t(X[[j]]) %*% X[[j]] / sigma2s[j])
+        Betas_mu <- Betas_var %*% (iSigma %*% mu + t(X[[j]]) %*% Y[[j]] / sigma2s[j])
+        Betas[j,] <- rmvnorm(1, Betas_mu, Betas_var)
+    }
+    beta0.samples.v2[i,] <- t(Betas[,1])
+    beta1.samples.v2[i,] <- t(Betas[,2])
+    
+    #mu Sample
+    mu_approx <- colMeans(Betas)
+    mu_var <- solve(m*iSigma + iLambda0)
+    mu_calc <- mu_var %*% (m*iSigma %*% mu_approx + iLambda0 %*% mu0)
+    mu <- t(rmvnorm(1,mu_calc, mu_var))
+    mu.samples.v2[i,] <- mu
+    
+    #Sigma Sample
+    Sigma_mu.vec <- matrix(t(mu), nrow = m, ncol=2, byrow=T)
+    Sigma_BetasVar <- t(Betas - Sigma_mu.vec) %*% (Betas - Sigma_mu.vec)
+    Sigma <- rinvwishart(nu = eta0 + m, S = S0 + Sigma_BetasVar)
+    iSigma <- solve(Sigma)
+    Sigma11.samples.v2[i] <- Sigma[1,1]
+    Sigma22.samples.v2[i] <- Sigma[2,2]
+}
+```
+
+## Task 3.f The Posterior of standard devation
+
+Give the posterior mean of each school's standard deviation
+
+```{r }
+task3f.mean_sigma <- colMeans(sqrt(sigma2s.v2))
+
+plot( range(nels[,3]),range(nels[,4]),type="n",xlab="SES",
+      ylab="math score")
+for(j in 1:m) {    abline(colMeans(beta0.samples.v2)[j],colMeans(beta1.samples.v2)[j],col="gray")  }
+abline( mean(mu.samples.v2[,1]),mean(mu.samples.v2[,2]),lwd=2 )
+```
+
+# Part 4 Mixture Models
+
+In this part, you are going to implement a simple mixture model for
+clustering tasks. It is mainly based on the formulas given in Rogers &
+Girolami's book. You will also try to cluster different synthetic data
+sets to see the effectiveness of the mixture model when it deals with
+different tasks.
+
+First, let's import the necessary packages and the data sets we will use
+later:
+
+```{r}
+library(foreign)
+library(mvtnorm)
+
+df1 = read.arff("2d-4c-no4.arff")
+df2 = read.arff("dartboard2.arff")
+colnames(df1) = c('x', 'y', 'class')
+colnames(df2) = c('x', 'y', 'class')
+```
+
+## Task 4.a
+
+For simplicity, we are only going to analyze 2-dimensional data sets.
+Let us define a function called `mixture_2d`, you are going to complete
+the missing part of this function following the instruction in the
+comments:
+
+```{r}
+mixture_2d = function(df, epoch, num_cluster, eps=1e-3) {
+  # df -- the data set we are going to cluster.
+  # epoch -- the number of EM updating iteration.
+  # num_cluster -- the preset number of clusters.
+  
+  min_x = min(df$x)
+  max_x = max(df$x)
+  min_y = min(df$y)
+  max_y = max(df$y)
+  N = dim(df)[1]
+  
+  # Randomly generate the initial mean vectors for each cluster 
+  mean_x_bef = runif(n=num_cluster, min=min_x, max=max_x)
+  mean_y_bef = runif(n=num_cluster, min=min_y, max=max_y)
+
+    # Let the initial pi values for each cluster evenly distribute
+  pi_j = rep(1/num_cluster, num_cluster)
+  # Based on the initial mean vectors, calculate the entries of the initial q matrix using the multivariate normal pdf. The mean should be the initial mean vectors we generate previously and choose identity matrix to be covariance matrix. Hint: Use function `dmvnorm`.
+  
+  q_df = matrix(0, ncol=num_cluster, nrow=N)
+  # Write your code here.
+  prob_k = matrix(0, nrow=N, ncol=num_cluster)
+  for (k in 1:num_cluster) {
+    prob_k[,k] = dmvnorm(x=df[,1:2], sigma = diag(2), mean = c(mean_x_bef[k], mean_y_bef[k]))
+    for (m in 1:N) {
+        q_df[m, k] <- pi_j[k]*prob_k[m,k]
+    }
+  }
+  q_df = q_df / c(prob_k %*% pi_j)
+  
+  # Now we start the iteration.
+  for (j in 1:epoch) {
+    # Write your code here.
+    pi_j =  colMeans(q_df) / sum(colMeans(q_df)) # update $\pi_k$, eq. 6.15
+    mean_x_now = rep(0, num_cluster)
+    mean_y_now = rep(0, num_cluster)
+    for (k in 1:num_cluster) { # update $\mu_k$, eq. 6.16 
+      mean_x_now[k] = sum(q_df[,k] * df[,1]) / sum(q_df[,k]) 
+      mean_y_now[k] = sum(q_df[,k] * df[,2]) / sum(q_df[,k])
+    }
+    # print(data.frame(mean_x_now,mean_y_now))
+    bool = TRUE 
+    
+    # Initialize the covariance matrices
+    sigmas = vector("list", num_cluster)
+    for (k in 1:num_cluster) {
+         sigmas[[k]] = matrix(0, ncol=2, nrow=2)
+    }
+    
+    for (k in 1:num_cluster) {
+      # Write your code here.
+      for (m in 1:N) {
+          sigma.df = as.matrix(df[m,1:2]) - c(mean_x_now[k], mean_y_now[k])
+          sigmas[[k]] = sigmas[[k]] + (q_df[m,k] / sum(q_df[,k])) * t(sigma.df) %*% (sigma.df) 
+      }
+      if (is.nan(sigmas[[k]][1,1])) {
+        print(paste("The function terminates early at epoch", j, "due to NAN problem."))
+        bool = FALSE
+      }
+    }
+    
+    if (!bool) {
+      break
+    }
+    
+    # Write your code here.
+    
+    for (k in 1:num_cluster) {
+    prob_k[,k] = dmvnorm(x=df[,1:2], sigma = sigmas[[k]], mean = c(mean_x_now[k], mean_y_now[k]))
+      for (m in 1:N) {
+        q_df[m, k] = pi_j[k]*prob_k[m,k]
+      }
+    }
+    q_df = q_df / c(prob_k %*% pi_j)
+    
+    bool = TRUE
+    for (k in 1:num_cluster) {
+      # Note: "distance" is defined as the euclidean distance between the current
+      # mean vector for category k and the previous one.
+      # Write your code here.
+      distance = norm(c(mean_x_bef[k],mean_y_bef[k]) - c(mean_x_now[k],mean_y_now[k]), type='2')
+      if (distance > eps) {
+        bool = FALSE
+      }
+    }
+      
+    if (bool && j < epoch) {
+      print(paste("The function terminates early at epoch", j))
+      break
+    }
+      
+    mean_x_bef = mean_x_now
+    mean_y_bef = mean_y_now
+    
+  }
+  
+  # Generate the classification result
+  # Write your code here.
+  class_result = max.col(q_df/rowSums(q_df))
+  
+  return(class_result)
+}
+
+```
+
+## Task 4.b
+
+With different random seeds, perform clustering task on `df1` and
+generate scatter plots respectively such that data points belonging to
+different categories will have different colors. What do you find? Why?
+
+```{r}
+set.seed(1234)
+class_result1 = mixture_2d(df1, epoch=10, num_cluster=4, eps=1e-3)
+set.seed(5678)
+class_result2 = mixture_2d(df1, epoch=10, num_cluster=4, eps=1e-3)
+
+# Write your code here.
+plot(df1$x, df1$y, col = class_result1)
+plot(df1$x, df1$y, col = class_result2)
+
+task.4b <- 'WIth different initializations, the clusters converged towards different mean points and subsequently created different clustered environments. We see that the lower-centered group of data points are represented different based on our chosen seed.'
+```
+
+## Task 4.c
+
+Perform the clustering task using the same seeds and parameters in Task
+3.b. However, this time, we use data set `df2`. What do you find? Why?
+
+```{r}
+# Write your code here.
+set.seed(1234)
+class_result3 = mixture_2d(df2, epoch=10, num_cluster=4, eps=1e-3)
+set.seed(5678)
+class_result4 = mixture_2d(df2, epoch=10, num_cluster=4, eps=1e-3)
+
+# plot result
+plot(df2$x, df2$y, col = class_result3)
+plot(df2$x, df2$y, col = class_result4)
+
+task.4c <- 'Our clustering model fails when data is presented as circles due to the nature of the average being centered and equal for all rings. This leads to the function terminating early because the distance between old and new averages is small'
+```
+
+# Part 5 Gaussian Processes
+
+In [Rogers] they study the result of 100m olympic results, here you will
+fit a Gaussian Processes (GP) to the data.
+
+```{r cars}
+male100 = read.csv(file="male100.csv",header=FALSE)
+y = male100[,2]
+x = male100[,1]
+
+# Rescale x for numerical stability
+x = x - x[1] 
+#absolute distance between all points
+```
+
+## Task 5.a Parameter estimation
+
+You will fit a GP with a squared kernel ( eq (8.3) in [Lindholm]),
+
+$$
+k(x,x') = \eta^2\exp( - \frac{||x-x'||^2_2}{2 l^2}) 
+$$
+
+and we will also have measurement noise
+
+$$
+\tilde k(x,x') = \eta^2\exp( - \frac{||x-x'||^2_2}{2 l^2}) + \sigma^2\mathbb{I}(x=x')
+$$
+
+To evaluate this function you need to compute the distance between all
+points, this can easily be done using `dist`
+
+```{r}
+D = as.matrix(dist(x))
+```
+
+The first thing you need to do is find the optimal parameters using
+maximum likelihood. The parameters you need to fit are
+$(\mu,l,\eta^2,\sigma^2)$. For this you will use `optim`. The likelihood
+is given by equation (9.5) in [Lindholm]. Complete the missing lines in
+the function `loglik` and give the optimal parameter found
+
+```{r}
+loglik <- function(theta, y, D, x){
+  mu     <- theta[1]
+  l      <- exp(theta[2])
+  eta2   <- exp(theta[3])
+  sigma2 <- exp(theta[4])
+  # Write your code here.
+  KX <- eta2 * exp(-D^2 / (2 * l^2))
+  KXtilde <- KX + diag(sigma2, nrow=dim(D)[1], ncol=dim(D)[2])
+  R <- chol(KXtilde)
+  logD <- 2*sum(log(diag(R))) #This is the log determinant of KXtilde  
+  # Write your code here.
+  iR <- solve(R)
+  q <- length(y)
+  loglik_ <- -q*0.5*log(2 * pi) - 0.5*logD -0.5*t(y - mu)%*% iR %*%(y - mu)
+
+  return(loglik_)
+}
+theta0 <- c(11, -0.4, -4, -2)# inital guess
+
+# loglik(theta0, y,D,x)
+
+# Write your code here.
+res <- optim(par = theta0, fn = loglik, y = y, D = D, x = x,
+             control = list(abstol = 10^-8, fnscale=-1))
+
+mu     <- res$par[1]
+l      <- exp(res$par[2])
+eta2   <- exp(res$par[3])
+sigma2 <- exp(res$par[4])
+
+# loglik(c(mu,l,eta2,sigma2), y, D, x)
+```
+
+## Task 5.b Non parameteric function
+
+Now we will visualize the posterior mean given data at the location
+given by `x.grid`. This is done using equation (9.26a) [Lindholm] but
+with added mean effect (note also there is a typo in (9.26a) where it
+should not be $\tilde {\bf K}({\bf X},{\bf X}_x)$ but \$ {\bf K}({\bf
+X},{\bf X}\_x)\$ )
+
+$$
+m_*= \mu +  {\bf K}({\bf X},{\bf X}_*)^T \tilde{\mathbf K}\left({\bf X},{\bf X} \right)^{-1}\left(y-\mu \right)
+$$
+
+```{r}
+x.grid <- seq(min(x), max(x), length.out=100)
+x_ <- c(x,x.grid)
+indX <- 1:length(x)
+indgrid <- -(1:length(x))
+D_ <- as.matrix(dist(x_))
+# Write your code here.
+KX <- eta2 * exp(-D_[indX, indX]^2 / (2 * l^2))
+KXstar <- eta2 * exp(-(D_[indX, indgrid])^2 / (2 * l^2)) #Here we use the distance between the new points created by x.grid and the original points x by looking at the distance matrix at the specified rows and columns
+KXtilde <- KX + diag(sigma2, nrow = length(x))
+mstar <- mu + t(KXstar) %*% solve(KXtilde) %*% (y - mu)
+
+plot(x,y)
+lines(x.grid, mstar,col='red')
+```
